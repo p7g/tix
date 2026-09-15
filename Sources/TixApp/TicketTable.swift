@@ -40,6 +40,7 @@ struct TicketTable: NSViewRepresentable {
     }
     func updateNSView(_ nsView: NSScrollView, context: Context) {
         let coordinator = context.coordinator
+        let shouldRevealSelection = coordinator.parent.selection != selection || coordinator.parent.showsLanes != showsLanes
         let changed = coordinator.parent.rows != rows || coordinator.parent.showsLanes != showsLanes
         coordinator.parent = self
         guard let table = coordinator.table else { return }
@@ -50,6 +51,7 @@ struct TicketTable: NSViewRepresentable {
         if changed || table.numberOfRows != rows.count { table.reloadData() }
         if let selection, let index = rows.firstIndex(where: { $0.ticket?.id == selection }) {
             if table.selectedRow != index { table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false) }
+            if shouldRevealSelection { table.scrollRowToVisible(index) }
         } else { table.deselectAll(nil) }
         coordinator.updating = false
     }

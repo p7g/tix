@@ -44,6 +44,7 @@ public struct LaneRow: Identifiable, Equatable, Sendable {
 public struct LaneLayout: Equatable, Sendable {
     public var rows: [LaneRow]
     public var width: Int
+    public init(rows: [LaneRow], width: Int) { self.rows = rows; self.width = width }
 }
 
 public enum TicketGraph {
