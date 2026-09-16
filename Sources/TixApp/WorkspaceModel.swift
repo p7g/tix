@@ -77,13 +77,21 @@ import TixCore
             recent = [next.path] + recent.filter { $0 != next.path }
             recent = Array(recent.prefix(10))
             UserDefaults.standard.set(recent, forKey: "recentWorkspaces")
-        } catch { self.error = error.localizedDescription }
+        } catch {
+            self.error = error.localizedDescription
+        }
     }
     func chooseWorkspace() {
         let panel = NSOpenPanel()
-        panel.title = "Open Tix Workspace"; panel.message = "Choose the workspace folder containing tickets.sqlite."
-        panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.allowsMultipleSelection = false
-        if panel.runModal() == .OK, let url = panel.url { open(url.appendingPathComponent("tickets.sqlite").path) }
+        panel.title = "Open Tix Workspace"
+        panel.message = "Choose the workspace folder containing tickets.sqlite."
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.showsHiddenFiles = true
+        if panel.runModal() == .OK, let url = panel.url {
+            open(url.appendingPathComponent("tickets.sqlite").path)
+        }
     }
     func createWorkspace() {
         guard confirmDiscard() else { return }

@@ -8,7 +8,7 @@ struct DisplayRow: Equatable {
     var lane: LaneRow?
 }
 
-/// NSTableView owns selection and scrolling. Zero row spacing keeps graph tracks continuous.
+/// NSTableView owns row sizing, selection, and scrolling.
 struct TicketTable: NSViewRepresentable {
     var rows: [DisplayRow]
     var laneWidth: Int
@@ -18,17 +18,14 @@ struct TicketTable: NSViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeNSView(context: Context) -> NSScrollView {
         let table = NSTableView()
-        table.rowHeight = 34
-        table.intercellSpacing = .zero
         table.usesAlternatingRowBackgroundColors = true
-        table.style = .plain
         table.allowsMultipleSelection = false
         table.allowsEmptySelection = true
-        table.columnAutoresizingStyle = .lastColumnOnlyAutoresizingStyle
-        for (name, title, width) in [("graph", "", 60.0), ("id", "ID", 90.0), ("title", "Title", 340.0), ("status", "Status", 110.0), ("owner", "Owner", 120.0)] {
+        table.columnAutoresizingStyle = .reverseSequentialColumnAutoresizingStyle
+        for (name, title) in [("graph", ""), ("id", "ID"), ("title", "Title"), ("status", "Status"), ("owner", "Owner")] {
             let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(name))
-            column.title = title; column.width = width; column.minWidth = width
-            column.resizingMask = name == "graph" ? [] : [.userResizingMask, .autoresizingMask]
+            column.title = title
+            column.resizingMask = name == "graph" || name == "id" ? [] : [.userResizingMask, .autoresizingMask]
             table.addTableColumn(column)
         }
         table.delegate = context.coordinator; table.dataSource = context.coordinator
@@ -45,10 +42,13 @@ struct TicketTable: NSViewRepresentable {
         coordinator.parent = self
         guard let table = coordinator.table else { return }
         coordinator.updating = true
+        // Reload before unhiding the graph column: unhiding makes AppKit synchronously
+        // populate that column's cells using its current (stale) row bookkeeping, which
+        // can pass row indexes beyond rows.count when the table just shrank.
+        if changed || table.numberOfRows != rows.count { table.reloadData() }
         let graph = table.tableColumns[0]
         graph.isHidden = !showsLanes
         graph.width = CGFloat(max(1, laneWidth) * 20 + 16)
-        if changed || table.numberOfRows != rows.count { table.reloadData() }
         if let selection, let index = rows.firstIndex(where: { $0.ticket?.id == selection }) {
             if table.selectedRow != index { table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false) }
             if shouldRevealSelection { table.scrollRowToVisible(index) }

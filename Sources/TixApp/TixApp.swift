@@ -85,7 +85,7 @@ struct WorkspaceView: View {
             ToolbarItem {
                 if model.path != nil {
                     Picker("View", selection: $model.mode) { Text("Waves").tag("Waves"); Text("Lanes").tag("Lanes") }
-                        .pickerStyle(.segmented).frame(width: 180)
+                        .pickerStyle(.segmented)
                 }
             }
         }

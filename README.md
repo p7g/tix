@@ -33,7 +33,7 @@ An open ticket is ready when all its prerequisites are done. Active work remains
 
 **Waves:** unfinished tickets are grouped by longest unfinished prerequisite chain. Completed prerequisites cut the chain. Active tickets stay in their layer. Completed tickets have a collapsible section.
 
-**Lanes:** every ticket, including completed tickets, appears in stable topological order. Tracks branch and join in the left gutter. A bridge/gap at an intermediate crossing means no connection; a dot identifies the row's ticket. Rows cannot be independently sorted because their order carries graph meaning.
+**Lanes:** every ticket, including completed tickets, appears in stable topological order within its connected group. Independent groups stay together, ordered by their lowest ticket ID; standalone tickets never interrupt another group's tracks. Tracks branch and join in the left gutter. A bridge/gap at an intermediate crossing means no connection; a dot identifies the row's ticket. Rows cannot be independently sorted because their order carries graph meaning.
 
 Readiness represents declared dependencies only. Tix does not inspect source files, predict code conflicts, launch agents, or manage branches.
 
@@ -71,7 +71,7 @@ Agents should read before editing and pass `expectedRevision`. Omitting it expli
 ## Architecture
 
 - `TixCore`: ticket model, deterministic graph layout, and GRDB-backed SQLite operations.
-- `TixApp`: SwiftUI workspace and editor around an AppKit `NSTableView`; zero row spacing keeps graph lines continuous.
+- `TixApp`: SwiftUI workspace and editor around an AppKit `NSTableView`, with native row sizing and a graph gutter.
 - `TixMCP`: the official Swift MCP SDK with ten focused tools.
 
 Both processes open the same file. GRDB write transactions acquire SQLite's write lock before checking conditions, so competing claims and dependency edits serialize safely. WAL allows readers alongside a writer. Foreign keys, checks, and a five-second busy timeout are enabled. A versioned migration creates tickets and prerequisite edges; revisions prevent stale editor saves. The app polls `data_version` on its persistent connection once a second while visible and refreshes on activation and local writes.

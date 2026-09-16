@@ -74,7 +74,7 @@ public enum TicketGraph {
     }
 
     public static func lanes(_ tickets: [Ticket]) throws -> LaneLayout {
-        let ordered = try ordered(tickets)
+        let ordered = try connectedGroups(tickets).flatMap { try Self.ordered($0) }
         // Tracks carry a prerequisite until its last dependent has been emitted.
         var tracks: [Int64?] = []
         var remaining: [Int64: Set<Int64>] = [:]
@@ -110,6 +110,33 @@ public enum TicketGraph {
             rows.append(LaneRow(ticket: ticket, lane: lane, segments: segments))
         }
         return LaneLayout(rows: rows, width: width)
+    }
+
+    /// Keep independent graphs contiguous. Both edge directions matter: two roots
+    /// that eventually join belong to the same group. IDs stabilize group order.
+    private static func connectedGroups(_ tickets: [Ticket]) -> [[Ticket]] {
+        let byID = Dictionary(uniqueKeysWithValues: tickets.map { ($0.id, $0) })
+        var neighbors: [Int64: Set<Int64>] = [:]
+        for ticket in tickets {
+            for prerequisite in ticket.prerequisites where byID[prerequisite] != nil {
+                neighbors[ticket.id, default: []].insert(prerequisite)
+                neighbors[prerequisite, default: []].insert(ticket.id)
+            }
+        }
+        var visited = Set<Int64>()
+        var groups: [[Ticket]] = []
+        for id in byID.keys.sorted() where visited.insert(id).inserted {
+            var pending = [id]
+            var group: [Ticket] = []
+            while let next = pending.popLast() {
+                group.append(byID[next]!)
+                for neighbor in neighbors[next] ?? [] where visited.insert(neighbor).inserted {
+                    pending.append(neighbor)
+                }
+            }
+            groups.append(group)
+        }
+        return groups
     }
 }
 

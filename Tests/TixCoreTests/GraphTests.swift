@@ -36,4 +36,47 @@ struct GraphTests {
         #expect(row.segments.contains { $0.top && $0.joinsNode && $0.from == 0 && $0.to == 2 })
         #expect(row.segments.contains { $0.top && !$0.joinsNode && $0.from == 1 && $0.to == 1 })
     }
+
+    @Test func independentGroupsStayContiguous() throws {
+        // IDs interleave a diamond, a standalone ticket, and a smaller chain.
+        let tickets = [
+            Ticket(id: 1), Ticket(id: 2), Ticket(id: 3),
+            Ticket(id: 4, prerequisites: [1]), Ticket(id: 5, prerequisites: [3]),
+            Ticket(id: 6, prerequisites: [1]), Ticket(id: 7, prerequisites: [4, 6])
+        ]
+        let layout = try TicketGraph.lanes(tickets)
+        #expect(layout.rows.map(\.id) == [1, 4, 6, 7, 2, 3, 5])
+        #expect(try layout == TicketGraph.lanes(tickets.reversed()))
+        #expect(layout.width == 2)
+        // Nothing from the diamond crosses the standalone row or the next group.
+        #expect(layout.rows[4].lane == 0)
+        #expect(layout.rows[4].segments.isEmpty)
+        #expect(layout.rows[3].segments.allSatisfy { $0.top })
+        #expect(layout.rows[5].segments.allSatisfy { !$0.top })
+        #expect(layout.rows[5].lane == 0)
+        // Grouping is a lane concern; wave membership remains unchanged.
+        #expect(try TicketGraph.waves(tickets).map { $0.tickets.map(\.id) } == [[1, 2, 3], [4, 5, 6], [7]])
+    }
+
+    @Test func joinedRootsAndCompletedTicketsStayInOneGroup() throws {
+        let tickets = [
+            Ticket(id: 1, prerequisites: [6]), Ticket(id: 2),
+            Ticket(id: 3, prerequisites: [1, 5]), Ticket(id: 4, prerequisites: [2]),
+            Ticket(id: 5, status: .done), Ticket(id: 6, status: .done)
+        ]
+        let layout = try TicketGraph.lanes(tickets)
+        #expect(layout.rows.map(\.id) == [5, 6, 1, 3, 2, 4])
+        let positions = Dictionary(uniqueKeysWithValues: layout.rows.enumerated().map { ($0.element.id, $0.offset) })
+        for ticket in tickets {
+            for prerequisite in ticket.prerequisites {
+                #expect(positions[prerequisite]! < positions[ticket.id]!)
+            }
+        }
+    }
+
+    @Test func lanesStillRejectCyclesAcrossGroups() {
+        #expect(throws: TixError.self) {
+            try TicketGraph.lanes([Ticket(id: 1), Ticket(id: 2, prerequisites: [3]), Ticket(id: 3, prerequisites: [2])])
+        }
+    }
 }
