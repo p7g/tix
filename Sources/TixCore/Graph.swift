@@ -74,7 +74,59 @@ public enum TicketGraph {
     }
 
     public static func lanes(_ tickets: [Ticket]) throws -> LaneLayout {
-        let ordered = try connectedGroups(tickets).flatMap { try Self.ordered($0) }
+        let layouts = try connectedGroups(tickets).map { group in
+            let baseline = makeLanes(try ordered(group))
+            // Favoring narrower branches helps some joins but can leave a root
+            // waiting on others. Try both tie-breaks, retaining the ID baseline
+            // whenever it uses fewer lanes, shorter tracks, or less travel.
+            return try [false, true].reduce(baseline) { best, preferFewerBranches in
+                let compact = makeLanes(try compactOrder(group, preferFewerBranches: preferFewerBranches))
+                return layoutCost(compact) < layoutCost(best) ? compact : best
+            }
+        }
+        return LaneLayout(rows: layouts.flatMap(\.rows), width: layouts.map(\.width).max() ?? 1)
+    }
+
+    private static func layoutCost(_ layout: LaneLayout) -> (Int, Int, Int) {
+        let vertical = layout.rows.reduce(0) { $0 + Set($1.segments.filter(\.top).map(\.from)).count }
+        let horizontal = layout.rows.reduce(0) { $0 + $1.segments.reduce(0) { $0 + abs($1.to - $1.from) } }
+        return (layout.width, vertical, horizontal)
+    }
+
+    /// Among eligible tickets, prefer closing open tracks and continuing nearby
+    /// branches. Optionally favor less branching tickets before the final ID tie-break.
+    private static func compactOrder(_ tickets: [Ticket], preferFewerBranches: Bool) throws -> [Ticket] {
+        let ids = Set(tickets.map(\.id))
+        let parents = Dictionary(uniqueKeysWithValues: tickets.map { ($0.id, Set($0.prerequisites).intersection(ids)) })
+        var children: [Int64: Set<Int64>] = [:]
+        for ticket in tickets {
+            for parent in parents[ticket.id]! { children[parent, default: []].insert(ticket.id) }
+        }
+        var outstanding = children.mapValues(\.count)
+        var positions: [Int64: Int] = [:]
+        var remaining = tickets
+        var result: [Ticket] = []
+        while !remaining.isEmpty {
+            func score(_ ticket: Ticket) -> (Int, Int, Int, Int, Int64) {
+                let prerequisites = parents[ticket.id]!
+                let closing = prerequisites.filter { outstanding[$0] == 1 }.count
+                let branching = children[ticket.id]?.count ?? 0
+                let nearest = prerequisites.compactMap { positions[$0] }.max() ?? -1
+                return ((branching > 0 ? 1 : 0) - closing, -closing, -nearest, preferFewerBranches ? branching : 0, ticket.id)
+            }
+            let ready = remaining.indices.filter { index in parents[remaining[index].id]!.allSatisfy { positions[$0] != nil } }
+            guard let index = ready.min(by: { score(remaining[$0]) < score(remaining[$1]) }) else {
+                throw TixError.invalid("Dependencies contain a cycle.")
+            }
+            let ticket = remaining.remove(at: index)
+            positions[ticket.id] = result.count
+            result.append(ticket)
+            for parent in parents[ticket.id]! { outstanding[parent]! -= 1 }
+        }
+        return result
+    }
+
+    private static func makeLanes(_ ordered: [Ticket]) -> LaneLayout {
         // Tracks carry a prerequisite until its last dependent has been emitted.
         var tracks: [Int64?] = []
         var remaining: [Int64: Set<Int64>] = [:]

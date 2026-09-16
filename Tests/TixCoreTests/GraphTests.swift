@@ -31,9 +31,10 @@ struct GraphTests {
         }
     }
     @Test func crossingDoesNotJoinIntermediateTrack() throws {
-        let layout = try TicketGraph.lanes([Ticket(id: 1), Ticket(id: 2), Ticket(id: 3), Ticket(id: 4, prerequisites: [1, 3]), Ticket(id: 5, prerequisites: [1, 2])])
+        // Every root feeds every leaf, so row ordering cannot remove the crossings.
+        let layout = try TicketGraph.lanes([Ticket(id: 1), Ticket(id: 2), Ticket(id: 3), Ticket(id: 4, prerequisites: [1, 2, 3]), Ticket(id: 5, prerequisites: [1, 2, 3]), Ticket(id: 6, prerequisites: [1, 2, 3])])
         let row = layout.rows[3]
-        #expect(row.segments.contains { $0.top && $0.joinsNode && $0.from == 0 && $0.to == 2 })
+        #expect(row.segments.contains { $0.top && $0.joinsNode && $0.from == 0 && $0.to == 3 })
         #expect(row.segments.contains { $0.top && !$0.joinsNode && $0.from == 1 && $0.to == 1 })
     }
 
@@ -78,5 +79,57 @@ struct GraphTests {
         #expect(throws: TixError.self) {
             try TicketGraph.lanes([Ticket(id: 1), Ticket(id: 2, prerequisites: [3]), Ticket(id: 3, prerequisites: [2])])
         }
+    }
+
+    @Test func shortLeavesFinishBeforeOpeningLongBranches() throws {
+        let tickets = [
+            Ticket(id: 1), Ticket(id: 2, prerequisites: [1]), Ticket(id: 3, prerequisites: [2]),
+            Ticket(id: 4, prerequisites: [1]), Ticket(id: 5, prerequisites: [1]), Ticket(id: 6),
+            Ticket(id: 7, prerequisites: [6]), Ticket(id: 8, prerequisites: [3, 7]),
+            Ticket(id: 9, prerequisites: [3]), Ticket(id: 10, prerequisites: [9])
+        ]
+        let layout = try TicketGraph.lanes(tickets)
+        // The old ID ordering used three tracks and left the two short leaves
+        // hanging while the long branch was processed.
+        #expect(layout.width == 2)
+        #expect(layout.rows.prefix(4).map(\.id) == [1, 4, 5, 2])
+        checkConnections(tickets, layout)
+    }
+
+    @Test func longLivedBranchTracksAreReduced() throws {
+        // Shape from a real 22-ticket group with late-numbered prerequisites,
+        // several roots, leaf branches, and joins. ID ordering used 6 lanes and
+        // 68 occupied track-row boundaries.
+        let prerequisites: [Int64: [Int64]] = [
+            14: [38], 15: [37], 16: [15, 38], 17: [], 18: [17], 19: [17],
+            20: [18], 21: [19], 22: [21], 23: [15, 19], 24: [], 25: [24],
+            26: [24], 29: [23], 30: [25, 29], 31: [23], 32: [23],
+            35: [], 36: [35], 37: [36], 38: [37], 39: [18]
+        ]
+        let tickets = prerequisites.map { Ticket(id: $0.key, prerequisites: $0.value) }.sorted { $0.id < $1.id }
+        let layout = try TicketGraph.lanes(tickets)
+        #expect(layout.width == 3)
+        let occupied = layout.rows.reduce(0) { $0 + Set($1.segments.filter(\.top).map(\.from)).count }
+        #expect(occupied == 41)
+        #expect(try layout == TicketGraph.lanes(tickets.reversed()))
+        checkConnections(tickets, layout)
+    }
+
+    private func checkConnections(_ tickets: [Ticket], _ layout: LaneLayout) {
+        #expect(Set(layout.rows.map(\.id)) == Set(tickets.map(\.id)))
+        var tracks: [Int: Int64] = [:]
+        for row in layout.rows {
+            let top = row.segments.filter(\.top)
+            #expect(Set(top.map(\.from)) == Set(tracks.keys))
+            let incoming = top.filter(\.joinsNode)
+            #expect(Set(incoming.compactMap { tracks[$0.from] }) == Set(row.ticket.prerequisites))
+            #expect(incoming.allSatisfy { $0.to == row.lane })
+            var next: [Int: Int64] = [:]
+            for segment in row.segments where !segment.top {
+                next[segment.to] = segment.joinsNode ? row.id : tracks[segment.from]
+            }
+            tracks = next
+        }
+        #expect(tracks.isEmpty)
     }
 }

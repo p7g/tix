@@ -35,6 +35,8 @@ An open ticket is ready when all its prerequisites are done. Active work remains
 
 **Lanes:** every ticket, including completed tickets, appears in stable topological order within its connected group. Independent groups stay together, ordered by their lowest ticket ID; standalone tickets never interrupt another group's tracks. Tracks branch and join in the left gutter. A bridge/gap at an intermediate crossing means no connection; a dot identifies the row's ticket. Rows cannot be independently sorted because their order carries graph meaning.
 
+Within each group, deterministic heuristics favor closing open tracks and finishing nearby branches, trying two tie-breaks for branching tickets. Tix compares those layouts with ID-based topological ordering and chooses by lane count, total vertical track length, then horizontal travel. This keeps the best of three candidates without an expensive search for a global optimum. Waves retain their existing ordering.
+
 Readiness represents declared dependencies only. Tix does not inspect source files, predict code conflicts, launch agents, or manage branches.
 
 ## MCP configuration
