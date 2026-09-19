@@ -1,6 +1,51 @@
 import Foundation
+import Logging
 import MCP
 import TixCore
+
+/// The MCP Swift SDK 0.12.x models `capabilities.experimental` as a string map,
+/// while Codex correctly sends extension values as JSON objects. The server does
+/// not use client experimental capabilities, so remove only that incompatible
+/// field before the SDK decodes the initialization request.
+actor CodexCompatibleStdioTransport: Transport {
+    private let base = StdioTransport()
+    nonisolated let logger: Logger
+
+    init() {
+        logger = base.logger
+    }
+
+    func connect() async throws { try await base.connect() }
+    func disconnect() async { await base.disconnect() }
+    func send(_ data: Data) async throws { try await base.send(data) }
+
+    func receive() -> AsyncThrowingStream<Data, Error> {
+        AsyncThrowingStream { continuation in
+            Task {
+                do {
+                    for try await data in await base.receive() {
+                        continuation.yield(sanitize(data))
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+        }
+    }
+
+    private func sanitize(_ data: Data) -> Data {
+        guard var message = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              message["method"] as? String == "initialize",
+              var parameters = message["params"] as? [String: Any],
+              var capabilities = parameters["capabilities"] as? [String: Any],
+              capabilities["experimental"] is [String: Any] else { return data }
+        capabilities.removeValue(forKey: "experimental")
+        parameters["capabilities"] = capabilities
+        message["params"] = parameters
+        return (try? JSONSerialization.data(withJSONObject: message)) ?? data
+    }
+}
 
 func schema(_ properties: [String: Value], required: [String] = []) -> Value {
     .object(["type": .string("object"), "properties": .object(properties), "required": .array(required.map(Value.string)), "additionalProperties": .bool(false)])
@@ -87,7 +132,7 @@ if arguments == ["--help"] {
                 return try result(.object(["error": .string(error.localizedDescription), "code": .string("invalid_operation")]), isError: true)
             }
         }
-        try await server.start(transport: StdioTransport())
+        try await server.start(transport: CodexCompatibleStdioTransport())
         await server.waitUntilCompleted()
     } catch {
         FileHandle.standardError.write(Data("tix-mcp: \(error.localizedDescription)\n".utf8))
