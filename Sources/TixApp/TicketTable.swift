@@ -26,15 +26,22 @@ struct TicketTable: NSViewRepresentable {
             .reverseSequentialColumnAutoresizingStyle
         for (name, title) in [
             ("graph", ""), ("id", "ID"), ("title", "Title"),
-            ("priority", "Priority"), ("status", "Status"), ("owner", "Owner"),
+            ("priority", "Priority"),
         ] {
             let column = NSTableColumn(
                 identifier: NSUserInterfaceItemIdentifier(name)
             )
             column.title = title
-            column.resizingMask =
-                name == "graph" || name == "id"
-                ? [] : [.userResizingMask, .autoresizingMask]
+            column.resizingMask = name == "title"
+                ? [.userResizingMask, .autoresizingMask] : []
+            if name == "title" {
+                column.minWidth = 200
+                column.width = 400
+            } else if name == "priority" {
+                column.width = 85
+            } else if name == "id" {
+                column.width = 100
+            }
             table.addTableColumn(column)
         }
         table.delegate = context.coordinator
@@ -136,8 +143,9 @@ struct TicketTable: NSViewRepresentable {
             } else if let ticket = item.ticket {
                 switch key {
                 case "id":
-                    text.stringValue = ticket.displayID
-                    text.textColor = .secondaryLabelColor
+                    text.stringValue = "● " + ticket.displayID
+                    text.textColor = ticket.statusColor
+                    cell.toolTip = ticket.statusLabel
                 case "title": text.stringValue = ticket.title
                 case "priority":
                     let inherited = ticket.effectivePriority != ticket.priority
@@ -147,26 +155,10 @@ struct TicketTable: NSViewRepresentable {
                     cell.toolTip = inherited
                         ? "Assigned: \(ticket.priority.label). Raised by unfinished dependent tickets."
                         : ticket.priority.label
-                case "status":
-                    text.stringValue =
-                        ticket.ready
-                        ? "● Ready"
-                        : ticket.status == .active
-                            ? (ticket.blockers.isEmpty
-                                ? "● Active" : "● Active · blocked")
-                            : ticket.status == .done ? "✓ Done" : "Blocked"
-                    text.textColor =
-                        ticket.ready
-                        ? .systemGreen
-                        : ticket.status == .active
-                            ? .systemOrange : .secondaryLabelColor
-                case "owner":
-                    text.stringValue = ticket.owner ?? "—"
-                    text.textColor = .secondaryLabelColor
                 default: break
                 }
                 cell.setAccessibilityLabel(
-                    "\(ticket.displayID) \(key): \(text.stringValue)"
+                    "\(ticket.displayID) \(key): \(text.stringValue)" + (key == "id" ? ", \(ticket.statusLabel)" : "")
                 )
             }
             text.translatesAutoresizingMaskIntoConstraints = false
@@ -230,14 +222,7 @@ final class LaneCell: NSView {
             path.lineWidth = 1.5
             path.stroke()
         }
-        let color: NSColor =
-            row.ticket.status == .done
-            ? .secondaryLabelColor
-            : row.ticket.ready
-                ? .systemGreen
-                : row.ticket.status == .active
-                    ? .systemOrange : .controlAccentColor
-        color.setFill()
+        row.ticket.statusColor.setFill()
         NSBezierPath(
             ovalIn: NSRect(
                 x: x(row.lane) - 4,
@@ -246,5 +231,20 @@ final class LaneCell: NSView {
                 height: 8
             )
         ).fill()
+    }
+}
+
+extension Ticket {
+    var statusColor: NSColor {
+        status == .done ? .secondaryLabelColor
+            : ready ? .systemGreen
+            : status == .active ? .systemOrange : .controlAccentColor
+    }
+
+    var statusLabel: String {
+        status == .done ? "Done"
+            : ready ? "Ready"
+            : status == .active ? (blockers.isEmpty ? "Active" : "Active · blocked")
+            : "Blocked"
     }
 }

@@ -73,6 +73,10 @@ struct WorkspaceView: View {
                                 "\(model.tickets.count) tickets · \(model.tickets.filter(\.ready).count) ready"
                             )
                             Spacer()
+                            statusLegend("Ready", color: .green)
+                            statusLegend("Active", color: .orange)
+                            statusLegend("Blocked", color: .accentColor)
+                            statusLegend("Done", color: Color(nsColor: .secondaryLabelColor))
                         }.font(.caption).foregroundStyle(.secondary).padding(10)
                     }.frame(minWidth: 630)
                     if let draft = model.selectedDraft {
@@ -119,15 +123,17 @@ struct WorkspaceView: View {
             }
             ToolbarItem {
                 if model.path != nil {
-                    HStack(spacing: 12) {
-                        Toggle("Show done", isOn: $model.showCompleted)
-                            .toggleStyle(.checkbox)
-                        Picker("View", selection: $model.mode) {
-                            Text("Waves").tag("Waves")
-                            Text("Lanes").tag("Lanes")
-                        }
-                        .pickerStyle(.segmented)
+                    Toggle("Show done", isOn: $model.showCompleted)
+                        .toggleStyle(.checkbox)
+                }
+            }
+            ToolbarItem {
+                if model.path != nil {
+                    Picker("View", selection: $model.mode) {
+                        Text("Waves").tag("Waves")
+                        Text("Lanes").tag("Lanes")
                     }
+                    .pickerStyle(.segmented)
                 }
             }
         }
@@ -155,6 +161,13 @@ struct WorkspaceView: View {
             Text(model.error ?? "")
         }
     }
+    private func statusLegend(_ title: String, color: Color) -> some View {
+        HStack(spacing: 4) {
+            Circle().fill(color).frame(width: 6, height: 6)
+            Text(title)
+        }
+    }
+
     private var welcome: some View {
         VStack(spacing: 18) {
             Image(systemName: "ticket").font(.system(size: 44)).foregroundStyle(
