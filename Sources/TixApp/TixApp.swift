@@ -73,12 +73,6 @@ struct WorkspaceView: View {
                                 "\(model.tickets.count) tickets · \(model.tickets.filter(\.ready).count) ready"
                             )
                             Spacer()
-                            if model.mode == "Waves" {
-                                Toggle(
-                                    "Completed (\(model.tickets.filter { $0.status == .done }.count))",
-                                    isOn: $model.showCompleted
-                                ).toggleStyle(.checkbox)
-                            }
                         }.font(.caption).foregroundStyle(.secondary).padding(10)
                     }.frame(minWidth: 630)
                     if let draft = model.selectedDraft {
@@ -125,11 +119,15 @@ struct WorkspaceView: View {
             }
             ToolbarItem {
                 if model.path != nil {
-                    Picker("View", selection: $model.mode) {
-                        Text("Waves").tag("Waves")
-                        Text("Lanes").tag("Lanes")
+                    HStack(spacing: 12) {
+                        Toggle("Show done", isOn: $model.showCompleted)
+                            .toggleStyle(.checkbox)
+                        Picker("View", selection: $model.mode) {
+                            Text("Waves").tag("Waves")
+                            Text("Lanes").tag("Lanes")
+                        }
+                        .pickerStyle(.segmented)
                     }
-                    .pickerStyle(.segmented)
                 }
             }
         }

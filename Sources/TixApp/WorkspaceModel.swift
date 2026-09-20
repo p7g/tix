@@ -57,7 +57,8 @@ import TixCore
         return draft
     }
     var lanes: LaneLayout {
-        (try? TicketGraph.lanes(tickets)) ?? LaneLayout(rows: [], width: 1)
+        let visible = showCompleted ? tickets : tickets.filter { $0.status != .done }
+        return (try? TicketGraph.lanes(visible)) ?? LaneLayout(rows: [], width: 1)
     }
     var displayRows: [DisplayRow] {
         if mode == "Lanes" {
