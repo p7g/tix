@@ -44,6 +44,9 @@ public final class TicketStore: Sendable {
                     """
             )
         }
+        migrator.registerMigration("v2_priority") { db in
+            try db.execute(sql: "ALTER TABLE tickets ADD COLUMN priority TEXT NOT NULL DEFAULT 'normal' CHECK(priority IN ('urgent','high','normal','low'))")
+        }
         try migrator.migrate(queue)
     }
 
@@ -68,7 +71,7 @@ public final class TicketStore: Sendable {
         try queue.read { try Self.ticket($0, id) }
     }
 
-    @discardableResult public func create(title: String, body: String = "")
+    @discardableResult public func create(title: String, body: String = "", priority: TicketPriority = .normal)
         throws -> Ticket
     {
         let title = try Self.validText(title, field: "Title")
@@ -76,8 +79,8 @@ public final class TicketStore: Sendable {
             let now = Date().timeIntervalSince1970
             try db.execute(
                 sql:
-                    "INSERT INTO tickets(title, body, createdAt, updatedAt) VALUES (?, ?, ?, ?)",
-                arguments: [title, body, now, now]
+                    "INSERT INTO tickets(title, body, priority, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?)",
+                arguments: [title, body, priority.rawValue, now, now]
             )
             return try Self.ticket(db, db.lastInsertedRowID)
         }
@@ -88,6 +91,7 @@ public final class TicketStore: Sendable {
         _ id: Int64,
         title: String? = nil,
         body: String? = nil,
+        priority: TicketPriority? = nil,
         expectedRevision: Int64? = nil
     ) throws -> Ticket {
         let cleanTitle = try title.map {
@@ -100,9 +104,10 @@ public final class TicketStore: Sendable {
             }
             try db.execute(
                 sql:
-                    "UPDATE tickets SET title = ?, body = ?, updatedAt = ?, revision = revision + 1 WHERE id = ?",
+                    "UPDATE tickets SET title = ?, body = ?, priority = ?, updatedAt = ?, revision = revision + 1 WHERE id = ?",
                 arguments: [
                     cleanTitle ?? current.title, body ?? current.body,
+                    (priority ?? current.priority).rawValue,
                     Date().timeIntervalSince1970, id,
                 ]
             )
@@ -277,7 +282,7 @@ public final class TicketStore: Sendable {
             prerequisites[ticket, default: []].append(prerequisite)
             dependents[prerequisite, default: []].append(ticket)
         }
-        return rows.map { row in
+        return try TicketGraph.prioritized(rows.map { row in
             let id: Int64 = row["id"]
             let deps = prerequisites[id] ?? []
             return Ticket(
@@ -285,6 +290,7 @@ public final class TicketStore: Sendable {
                 title: row["title"],
                 body: row["body"],
                 status: TicketStatus(rawValue: row["status"])!,
+                priority: TicketPriority(rawValue: row["priority"])!,
                 owner: row["owner"],
                 createdAt: row["createdAt"],
                 updatedAt: row["updatedAt"],
@@ -293,6 +299,6 @@ public final class TicketStore: Sendable {
                 dependents: dependents[id] ?? [],
                 blockers: deps.filter { !completed.contains($0) }
             )
-        }
+        })
     }
 }

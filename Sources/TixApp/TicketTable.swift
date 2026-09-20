@@ -26,7 +26,7 @@ struct TicketTable: NSViewRepresentable {
             .reverseSequentialColumnAutoresizingStyle
         for (name, title) in [
             ("graph", ""), ("id", "ID"), ("title", "Title"),
-            ("status", "Status"), ("owner", "Owner"),
+            ("priority", "Priority"), ("status", "Status"), ("owner", "Owner"),
         ] {
             let column = NSTableColumn(
                 identifier: NSUserInterfaceItemIdentifier(name)
@@ -139,6 +139,14 @@ struct TicketTable: NSViewRepresentable {
                     text.stringValue = ticket.displayID
                     text.textColor = .secondaryLabelColor
                 case "title": text.stringValue = ticket.title
+                case "priority":
+                    let inherited = ticket.effectivePriority != ticket.priority
+                    text.stringValue = ticket.effectivePriority.label + (inherited ? " ↑" : "")
+                    text.textColor = ticket.effectivePriority == .urgent ? .systemRed
+                        : ticket.effectivePriority == .high ? .systemOrange : .secondaryLabelColor
+                    cell.toolTip = inherited
+                        ? "Assigned: \(ticket.priority.label). Raised by unfinished dependent tickets."
+                        : ticket.priority.label
                 case "status":
                     text.stringValue =
                         ticket.ready

@@ -78,6 +78,32 @@ struct StoreTests {
         #expect(successes == 1)
         #expect(try TicketGraph.ordered(store.list()).count == 2)
     }
+    @Test func priorityPersistsAndRecalculatesAcrossConnections() throws {
+        let (store, folder) = try workspace(); defer { try? FileManager.default.removeItem(atPath: folder) }
+        let other = try TicketStore(path: store.path)
+        let normal = try store.create(title: "Default")
+        #expect(normal.priority == .normal)
+        let root = try store.create(title: "Root", priority: .low)
+        let middle = try store.create(title: "Middle")
+        let leaf = try store.create(title: "Urgent", priority: .urgent)
+        try store.addDependency(middle.id, prerequisite: root.id)
+        try store.addDependency(leaf.id, prerequisite: middle.id)
+        #expect(try other.list(ready: true).map(\.id) == [root.id, normal.id])
+        #expect(try other.get(root.id).effectivePriority == .urgent)
+        try other.edit(leaf.id, priority: .high)
+        #expect(try store.get(root.id).effectivePriority == .high)
+        #expect(throws: TixError.self) {
+            try store.edit(leaf.id, priority: .low, expectedRevision: leaf.revision)
+        }
+        try store.transition(leaf.id, .complete)
+        #expect(try other.get(root.id).effectivePriority == .normal)
+        try store.transition(leaf.id, .reopen)
+        #expect(try other.get(root.id).effectivePriority == .high)
+        try store.removeDependency(middle.id, prerequisite: root.id)
+        #expect(try other.get(root.id).effectivePriority == .low)
+        #expect(try other.get(leaf.id).priority == .high)
+    }
+
     @Test func missingWorkspaceDoesNotCreateFile() {
         let path = FileManager.default.temporaryDirectory.appendingPathComponent("missing-\(UUID()).sqlite").path
         #expect(throws: TixError.self) { try TicketStore(path: path) }

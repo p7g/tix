@@ -115,6 +115,40 @@ struct GraphTests {
         checkConnections(tickets, layout)
     }
 
+    @Test func transitivePriorityAndAgeOrdering() throws {
+        let tickets = [
+            Ticket(id: 1, priority: .low),
+            Ticket(id: 2, prerequisites: [1]),
+            Ticket(id: 3, priority: .urgent, prerequisites: [2]),
+            Ticket(id: 4, priority: .high),
+            Ticket(id: 5, createdAt: 20), Ticket(id: 6, createdAt: 10)
+        ]
+        let prioritized = try TicketGraph.prioritized(tickets)
+        #expect(prioritized.map(\.id) == [1, 2, 3, 4, 6, 5])
+        #expect(prioritized.prefix(3).allSatisfy { $0.effectivePriority == .urgent })
+        #expect(prioritized[0].priority == .low)
+        #expect(try TicketGraph.waves(tickets)[0].tickets.map(\.id) == [1, 4, 6, 5])
+        #expect(try TicketGraph.lanes(tickets).rows.prefix(3).map(\.id) == [1, 2, 3])
+    }
+
+    @Test func completedTicketsCutPriorityInheritance() throws {
+        let tickets = [
+            Ticket(id: 1, priority: .low),
+            Ticket(id: 2, status: .done, priority: .high, prerequisites: [1]),
+            Ticket(id: 3, priority: .urgent, prerequisites: [2])
+        ]
+        let result = try TicketGraph.prioritized(tickets)
+        #expect(result.first { $0.id == 1 }?.effectivePriority == .low)
+        #expect(result.first { $0.id == 2 }?.effectivePriority == .high)
+    }
+
+    @Test func branchesUseMaximumRatherThanSum() throws {
+        let tickets = [Ticket(id: 1, priority: .low), Ticket(id: 2, priority: .high)]
+            + (3...20).map { Ticket(id: Int64($0), priority: .low, prerequisites: [1]) }
+        #expect(try TicketGraph.prioritized(tickets).first?.id == 2)
+        #expect(try TicketGraph.lanes(tickets).rows.first?.id == 2)
+    }
+
     private func checkConnections(_ tickets: [Ticket], _ layout: LaneLayout) {
         #expect(Set(layout.rows.map(\.id)) == Set(tickets.map(\.id)))
         var tracks: [Int: Int64] = [:]

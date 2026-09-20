@@ -52,11 +52,12 @@ func schema(_ properties: [String: Value], required: [String] = []) -> Value {
 }
 let string: Value = .object(["type": .string("string")])
 let integer: Value = .object(["type": .string("integer"), "minimum": .int(1)])
+let prioritySchema: Value = .object(["type": .string("string"), "enum": .array(TicketPriority.allCases.map { .string($0.rawValue) })])
 let tools: [Tool] = [
-    Tool(name: "list_tickets", description: "List tickets with optional status and readiness filters. Ready means open with all prerequisites done.", inputSchema: schema(["status": .object(["type": .string("string"), "enum": .array([.string("open"), .string("active"), .string("done")])]), "ready": .object(["type": .string("boolean")])])),
+    Tool(name: "list_tickets", description: "List tickets ordered by effective priority, then oldest first, with optional status and readiness filters. Ready means open with all prerequisites done.", inputSchema: schema(["status": .object(["type": .string("string"), "enum": .array([.string("open"), .string("active"), .string("done")])]), "ready": .object(["type": .string("boolean")])])),
     Tool(name: "get_ticket", description: "Read a ticket including revision, prerequisite, dependent, and blocker IDs.", inputSchema: schema(["id": integer], required: ["id"])),
-    Tool(name: "create_ticket", description: "Create an open ticket. Only a title is required.", inputSchema: schema(["title": string, "body": string], required: ["title"])),
-    Tool(name: "edit_ticket", description: "Edit title or Markdown body. Supply expectedRevision from get_ticket to reject stale edits; omit only for deliberate overwrite.", inputSchema: schema(["id": integer, "title": string, "body": string, "expectedRevision": integer], required: ["id"])),
+    Tool(name: "create_ticket", description: "Create an open ticket. Only a title is required.", inputSchema: schema(["title": string, "body": string, "priority": prioritySchema], required: ["title"])),
+    Tool(name: "edit_ticket", description: "Edit title, Markdown body, or priority. Supply expectedRevision from get_ticket to reject stale edits; omit only for deliberate overwrite.", inputSchema: schema(["id": integer, "title": string, "body": string, "priority": prioritySchema, "expectedRevision": integer], required: ["id"])),
     Tool(name: "add_dependency", description: "Make id depend on prerequisite. Rejects cycles and duplicate edges.", inputSchema: schema(["id": integer, "prerequisite": integer], required: ["id", "prerequisite"])),
     Tool(name: "remove_dependency", description: "Remove a declared prerequisite from a ticket.", inputSchema: schema(["id": integer, "prerequisite": integer], required: ["id", "prerequisite"])),
     Tool(name: "claim_ticket", description: "Atomically claim a ready ticket for owner and mark it active. Conflicts return current ticket state.", inputSchema: schema(["id": integer, "owner": string], required: ["id", "owner"])),
@@ -90,6 +91,8 @@ func handle(_ params: CallTool.Parameters, store: TicketStore) throws -> CallToo
     for key in tool.inputSchema.objectValue!["required"]!.arrayValue!.compactMap(\.stringValue) where args[key] == nil {
         throw TixError.invalid("Missing required argument: \(key)")
     }
+    let priority = args["priority"]?.stringValue.flatMap(TicketPriority.init(rawValue:))
+    if args["priority"] != nil && priority == nil { throw TixError.invalid("Priority must be urgent, high, normal, or low.") }
     let id = Int64(args["id"]?.intValue ?? 0)
     let ticket: Ticket
     switch params.name {
@@ -98,10 +101,10 @@ func handle(_ params: CallTool.Parameters, store: TicketStore) throws -> CallToo
         if args["status"] != nil && status == nil { throw TixError.invalid("Status must be open, active, or done.") }
         return try result(.object(["tickets": .array(try store.list(status: status, ready: args["ready"]?.boolValue).map(ticketValue))]))
     case "get_ticket": ticket = try store.get(id)
-    case "create_ticket": ticket = try store.create(title: args["title"]!.stringValue!, body: args["body"]?.stringValue ?? "")
+    case "create_ticket": ticket = try store.create(title: args["title"]!.stringValue!, body: args["body"]?.stringValue ?? "", priority: priority ?? .normal)
     case "edit_ticket":
-        guard args["title"] != nil || args["body"] != nil else { throw TixError.invalid("Supply title or body to edit.") }
-        ticket = try store.edit(id, title: args["title"]?.stringValue, body: args["body"]?.stringValue, expectedRevision: args["expectedRevision"]?.intValue.map(Int64.init))
+        guard args["title"] != nil || args["body"] != nil || priority != nil else { throw TixError.invalid("Supply title, body, or priority to edit.") }
+        ticket = try store.edit(id, title: args["title"]?.stringValue, body: args["body"]?.stringValue, priority: priority, expectedRevision: args["expectedRevision"]?.intValue.map(Int64.init))
     case "add_dependency": ticket = try store.addDependency(id, prerequisite: Int64(args["prerequisite"]!.intValue!))
     case "remove_dependency": ticket = try store.removeDependency(id, prerequisite: Int64(args["prerequisite"]!.intValue!))
     case "claim_ticket": ticket = try store.claim(id, owner: args["owner"]!.stringValue!)

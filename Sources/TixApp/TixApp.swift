@@ -198,6 +198,11 @@ struct TicketDetail: View {
                 TextField("Title", text: $draft.title).font(
                     .title3.weight(.semibold)
                 ).textFieldStyle(.roundedBorder)
+                Picker("Priority", selection: $draft.priority) {
+                    ForEach(TicketPriority.allCases, id: \.self) { priority in
+                        Text(priority.label).tag(priority)
+                    }
+                }
                 HStack {
                     Text("Description").font(.headline)
                     Spacer()
@@ -232,7 +237,7 @@ struct TicketDetail: View {
                             systemImage: "exclamationmark.triangle"
                         ).font(.headline)
                         Text(
-                            "Your draft is preserved. Reload the current ticket or explicitly overwrite its title and description."
+                            "Your draft is preserved. Reload the current ticket or explicitly overwrite its title, description, and priority."
                         ).font(.caption)
                         HStack {
                             Button("Reload") { draft.reload() }

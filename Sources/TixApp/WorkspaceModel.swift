@@ -4,14 +4,16 @@ import TixCore
 
 @MainActor final class TicketDraft: ObservableObject {
     @Published var title: String
+    @Published var priority: TicketPriority
     @Published var body: String
     @Published var latest: Ticket
     @Published var base: Ticket
-    var dirty: Bool { title != base.title || body != base.body }
+    var dirty: Bool { title != base.title || body != base.body || priority != base.priority }
     var conflicted: Bool { dirty && latest.revision != base.revision }
     init(_ ticket: Ticket) {
         title = ticket.title
         body = ticket.body
+        priority = ticket.priority
         latest = ticket
         base = ticket
     }
@@ -24,6 +26,7 @@ import TixCore
         latest = ticket
         title = ticket.title
         body = ticket.body
+        priority = ticket.priority
     }
 }
 
@@ -200,6 +203,7 @@ import TixCore
                 draft.base.id,
                 title: draft.title,
                 body: draft.body,
+                priority: draft.priority,
                 expectedRevision: overwrite ? nil : draft.base.revision
             )
             draft.reload(ticket)
