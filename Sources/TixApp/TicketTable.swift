@@ -143,8 +143,16 @@ struct TicketTable: NSViewRepresentable {
             } else if let ticket = item.ticket {
                 switch key {
                 case "id":
-                    text.stringValue = "● " + ticket.displayID
-                    text.textColor = ticket.statusColor
+                    let label = NSMutableAttributedString(
+                        string: "● " + ticket.displayID,
+                        attributes: [.foregroundColor: NSColor.secondaryLabelColor]
+                    )
+                    label.addAttribute(
+                        .foregroundColor,
+                        value: ticket.statusColor,
+                        range: NSRange(location: 0, length: 1)
+                    )
+                    text.attributedStringValue = label
                     cell.toolTip = ticket.statusLabel
                 case "title": text.stringValue = ticket.title
                 case "priority":
