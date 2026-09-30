@@ -23,7 +23,8 @@ Point every agent working on that ticket collection at the same absolute databas
 
 ## Ticket workflow
 
-- Enter a title and press Return to create a ticket; Command-N focuses the entry field.
+- Search by title, ID (such as TIX-123 or 123), or description. Every space-separated term must match; matching ignores case and accents and supports partial words. Results appear as a flat list and respect **Show done**. Clear search to return to Waves/Lanes.
+- Click the header **+** button or press Command-N to open New Ticket. Enter a title and press Return to create it, or Escape to cancel.
 - Select a row to edit its title and Markdown description. Command-S saves. Preview displays inline Markdown formatting with preserved line breaks.
 - Add prerequisites in the detail pane. Links navigate to related tickets; the minus button removes a prerequisite.
 - **Claim** a ready ticket with an owner name. **Release** returns active work to open; **Complete** marks it done; **Reopen** clears the owner and returns it to open.

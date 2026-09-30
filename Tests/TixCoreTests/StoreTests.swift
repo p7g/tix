@@ -8,6 +8,20 @@ struct StoreTests {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         return (try TicketStore(path: folder.appendingPathComponent("tickets.sqlite").path, create: true), folder.path)
     }
+    @Test func searchAcrossTicketText() throws {
+        let (store, folder) = try workspace()
+        defer { try? FileManager.default.removeItem(atPath: folder) }
+        let ticket = try store.create(title: "Fix Café login", body: "Refresh expired credentials")
+        #expect(ticket.matches("CAFE"))
+        #expect(ticket.matches("log"))
+        #expect(ticket.matches(ticket.displayID.lowercased()))
+        #expect(ticket.matches(String(ticket.id)))
+        #expect(ticket.matches("  cafe\ncredentials  "))
+        #expect(ticket.matches("\t "))
+        #expect(!ticket.matches("login missing"))
+        #expect(!ticket.matches("\"quoted\""))
+    }
+
     @Test func lifecycleAndDependencies() throws {
         let (store, folder) = try workspace(); defer { try? FileManager.default.removeItem(atPath: folder) }
         let a = try store.create(title: " A ", body: "**Done means** passing tests")

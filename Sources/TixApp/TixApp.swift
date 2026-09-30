@@ -39,8 +39,7 @@ import TixCore
 
 struct WorkspaceView: View {
     @ObservedObject var model: WorkspaceModel
-    @State private var newTitle = ""
-    @FocusState private var creating: Bool
+    @State private var showingNewTicket = false
     @Environment(\.scenePhase) private var scenePhase
     private let timer = Timer.publish(every: 1, on: .main, in: .common)
         .autoconnect()
@@ -50,13 +49,15 @@ struct WorkspaceView: View {
                 welcome
             } else {
                 HStack {
-                    TextField("New ticket title", text: $newTitle)
-                        .textFieldStyle(.roundedBorder).focused($creating)
-                        .onSubmit(createTicket)
-                    Button("Add Ticket", action: createTicket).disabled(
-                        newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-                            .isEmpty
-                    )
+                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                    TextField("Search tickets by title, ID, or description", text: $model.searchQuery)
+                        .textFieldStyle(.plain)
+                        .accessibilityLabel("Search tickets")
+                    if !model.searchQuery.isEmpty {
+                        Button { model.searchQuery = "" } label: {
+                            Image(systemName: "xmark.circle.fill")
+                        }.buttonStyle(.plain).help("Clear search")
+                    }
                 }.padding(12)
                 Divider()
                 HSplitView {
@@ -64,13 +65,18 @@ struct WorkspaceView: View {
                         TicketTable(
                             rows: model.displayRows,
                             laneWidth: model.lanes.width,
-                            showsLanes: model.mode == "Lanes",
+                            showsLanes: model.mode == "Lanes" && !model.isSearching,
                             selection: $model.selection
                         )
+                        .overlay {
+                            if model.isSearching && model.displayRows.isEmpty {
+                                ContentUnavailableView.search(text: model.searchQuery)
+                            }
+                        }
                         Divider()
                         HStack {
                             Text(
-                                "\(model.tickets.count) tickets · \(model.tickets.filter(\.ready).count) ready"
+                                model.isSearching ? "\(model.displayRows.count) matches" : "\(model.tickets.count) tickets · \(model.tickets.filter(\.ready).count) ready"
                             )
                             Spacer()
                             statusLegend("Ready", color: .green)
@@ -122,6 +128,13 @@ struct WorkspaceView: View {
                 }
             }
             ToolbarItem {
+                Button { showingNewTicket = true } label: {
+                    Label("New Ticket", systemImage: "plus")
+                }
+                .help("New Ticket (⌘N)")
+                .disabled(model.path == nil)
+            }
+            ToolbarItem {
                 if model.path != nil {
                     Toggle("Show done", isOn: $model.showCompleted)
                         .toggleStyle(.checkbox)
@@ -134,11 +147,17 @@ struct WorkspaceView: View {
                         Text("Lanes").tag("Lanes")
                     }
                     .pickerStyle(.segmented)
+                    .disabled(model.isSearching)
                 }
             }
         }
+        .sheet(isPresented: $showingNewTicket) {
+            NewTicketSheet(model: model)
+        }
         .onAppear { if model.path == nil { model.restore() } }
-        .onChange(of: model.newTicketRequest) { _, _ in creating = true }
+        .onChange(of: model.newTicketRequest) { _, _ in
+            if model.path != nil { showingNewTicket = true }
+        }
         .onReceive(timer) { _ in
             if NSApp.windows.contains(where: {
                 $0.isVisible && !$0.isMiniaturized
@@ -183,10 +202,49 @@ struct WorkspaceView: View {
             }
         }.frame(maxWidth: .infinity, maxHeight: .infinity)
     }
+}
+
+struct NewTicketSheet: View {
+    @ObservedObject var model: WorkspaceModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var title = ""
+    @State private var creationError: String?
+    @FocusState private var titleFocused: Bool
+
+    private var validTitle: Bool {
+        !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("New Ticket").font(.title2.bold())
+            TextField("Ticket title", text: $title)
+                .textFieldStyle(.roundedBorder)
+                .focused($titleFocused)
+                .onSubmit(createTicket)
+            if let creationError {
+                Text(creationError).foregroundStyle(.red).font(.callout)
+            }
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Create Ticket", action: createTicket)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(!validTitle)
+            }
+        }
+        .padding(24)
+        .frame(width: 440)
+        .onAppear { titleFocused = true }
+    }
+
     private func createTicket() {
-        if model.createTicket(newTitle) {
-            newTitle = ""
-            creating = true
+        guard validTitle else { return }
+        if model.createTicket(title) {
+            dismiss()
+        } else {
+            creationError = model.error
+            model.error = nil
         }
     }
 }
@@ -376,6 +434,7 @@ struct TicketDetail: View {
             if model.tickets.first(where: { $0.id == id })?.status == .done {
                 model.showCompleted = true
             }
+            model.searchQuery = ""
             model.selection = id
         } label: {
             Text(

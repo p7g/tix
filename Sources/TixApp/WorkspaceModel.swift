@@ -40,6 +40,10 @@ import TixCore
     @Published var mode = "Waves"
     @Published var newTicketRequest = 0
     @Published var showCompleted = false
+    @Published var searchQuery = ""
+    var isSearching: Bool {
+        !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
     private var store: TicketStore?
     private var version: Int64?
     private var drafts: [Int64: TicketDraft] = [:]
@@ -64,6 +68,11 @@ import TixCore
         return (try? TicketGraph.lanes(visible)) ?? LaneLayout(rows: [], width: 1)
     }
     var displayRows: [DisplayRow] {
+        if isSearching {
+            return tickets.filter {
+                (showCompleted || $0.status != .done) && $0.matches(searchQuery)
+            }.map { DisplayRow(ticket: $0) }
+        }
         if mode == "Lanes" {
             return lanes.rows.map { DisplayRow(ticket: $0.ticket, lane: $0) }
         }
@@ -111,6 +120,7 @@ import TixCore
             self.path = next.path
             tickets = initial
             selection = nil
+            searchQuery = ""
             drafts = [:]
             version = initialVersion
             recent = [next.path] + recent.filter { $0 != next.path }
@@ -189,6 +199,7 @@ import TixCore
         do {
             let ticket = try store.create(title: title)
             refresh(force: true)
+            searchQuery = ""
             selection = ticket.id
             return true
         } catch {
