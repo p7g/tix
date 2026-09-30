@@ -48,23 +48,13 @@ struct WorkspaceView: View {
             if model.path == nil {
                 welcome
             } else {
-                HStack {
-                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                    TextField("Search tickets by title, ID, or description", text: $model.searchQuery)
-                        .textFieldStyle(.plain)
-                        .accessibilityLabel("Search tickets")
-                    if !model.searchQuery.isEmpty {
-                        Button { model.searchQuery = "" } label: {
-                            Image(systemName: "xmark.circle.fill")
-                        }.buttonStyle(.plain).help("Clear search")
-                    }
-                }.padding(12)
+                TicketSearchBar(model: model)
                 Divider()
                 HSplitView {
                     VStack(spacing: 0) {
                         TicketTable(
                             rows: model.displayRows,
-                            laneWidth: model.lanes.width,
+                            laneWidth: model.mode == "Lanes" && !model.isSearching ? model.lanes.width : 1,
                             showsLanes: model.mode == "Lanes" && !model.isSearching,
                             selection: $model.selection
                         )
@@ -201,6 +191,50 @@ struct WorkspaceView: View {
                 Button("Open Workspace…", action: model.chooseWorkspace)
             }
         }.frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// Keep keystrokes local so the workspace and AppKit table only update after a pause.
+struct TicketSearchBar: View {
+    @ObservedObject var model: WorkspaceModel
+    @State private var text = ""
+
+    var body: some View {
+        HStack {
+            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+            TextField("Search tickets by title, ID, or description", text: $text)
+                .textFieldStyle(.plain)
+                .accessibilityLabel("Search tickets")
+                .onSubmit { model.searchQuery = text }
+            if !text.isEmpty {
+                Button {
+                    text = ""
+                    model.searchQuery = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                }.buttonStyle(.plain).help("Clear search")
+            }
+        }
+        .padding(12)
+        .onAppear { text = model.searchQuery }
+        .onChange(of: model.searchRevision) { _, _ in
+            // Also cancel pending text when navigation or creation resets the search,
+            // including when the committed query was already empty.
+            text = model.searchQuery
+        }
+        .task(id: text) {
+            guard text != model.searchQuery else { return }
+            let query = text
+            if !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                do {
+                    try await Task.sleep(for: .milliseconds(200))
+                } catch {
+                    return
+                }
+            }
+            guard !Task.isCancelled else { return }
+            model.searchQuery = query
+        }
     }
 }
 

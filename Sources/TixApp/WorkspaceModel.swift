@@ -40,7 +40,10 @@ import TixCore
     @Published var mode = "Waves"
     @Published var newTicketRequest = 0
     @Published var showCompleted = false
-    @Published var searchQuery = ""
+    @Published var searchQuery = "" {
+        didSet { searchRevision += 1 }
+    }
+    @Published private(set) var searchRevision = 0
     var isSearching: Bool {
         !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
