@@ -84,7 +84,7 @@ def run(binary):
         other = None
         try:
             tools = client.request('tools/list', {})['tools']
-            assert len(tools) == 10
+            assert len(tools) == 11
             migrated = client.tool('get_ticket', id=1)['ticket']
             assert migrated['priority'] == migrated['effectivePriority'] == 'normal'
             assert migrated['body'] == 'Preserved body' and migrated['revision'] == 1
@@ -103,6 +103,18 @@ def run(binary):
             client.tool('edit_ticket', error=True, id=b['id'], title='Stale edit', expectedRevision=b['revision'])
             current = client.tool('get_ticket', id=b['id'])['ticket']
             client.tool('edit_ticket', id=b['id'], body='Updated details', expectedRevision=current['revision'])
+            # Partial body edits from two processes merge when they touch different text.
+            stale = client.tool('get_ticket', id=b['id'])['ticket']
+            other.tool('replace_in_ticket_body', id=b['id'], oldText='Updated', newText='Revised')
+            merged = client.tool('replace_in_ticket_body', id=b['id'], oldText='details', newText='details\n- [ ] docs')['ticket']
+            assert merged['body'] == 'Revised details\n- [ ] docs', merged
+            client.tool('replace_in_ticket_body', error=True, id=b['id'], oldText='Revised', newText='x', expectedRevision=stale['revision'])
+            missing = client.tool('replace_in_ticket_body', error=True, id=b['id'], oldText='absent', newText='x')
+            assert missing['code'] == 'invalid_operation' and 'not found' in missing['error'], missing
+            client.tool('replace_in_ticket_body', error=True, id=b['id'], oldText='e', newText='x')
+            client.tool('replace_in_ticket_body', error=True, id=b['id'], oldText='docs')
+            client.tool('replace_in_ticket_body', error=True, id=b['id'], oldText='docs', newText='x', replaceAll='yes')
+            assert client.tool('replace_in_ticket_body', id=b['id'], oldText='e', newText='E', replaceAll=True)['ticket']['body'] == 'REvisEd dEtails\n- [ ] docs'
             client.tool('add_dependency', error=True, id=a['id'], prerequisite=b['id'])
             client.tool('release_ticket', id=b['id'])
             client.tool('complete_ticket', id=b['id'])

@@ -67,6 +67,7 @@ Adapt the surrounding configuration format to your client. Both paths must be ab
 | `get_ticket` | `id` |
 | `create_ticket` | `title`, optional `body`, `priority` |
 | `edit_ticket` | `id`, `title`, `body`, and/or `priority`, optional `expectedRevision` |
+| `replace_in_ticket_body` | `id`, `oldText`, `newText`, optional `replaceAll` (boolean), `expectedRevision` |
 | `add_dependency` / `remove_dependency` | `id`, `prerequisite` |
 | `claim_ticket` | `id`, `owner` |
 | `release_ticket` / `complete_ticket` / `reopen_ticket` | `id` |
@@ -75,11 +76,13 @@ IDs are positive integers on the wire, displayed as `TIX-123` in the UI. Results
 
 Agents should read before editing and pass `expectedRevision`. Omitting it explicitly overwrites the supplied fields. Claims are atomic: exactly one competing claimant wins. No automatic lease expiration or agent liveness detection is performed.
 
+To change part of a description, use `replace_in_ticket_body` rather than resending the whole body. `oldText` must match the current body exactly and occur once (overlapping occurrences count); otherwise the edit fails and the body is unchanged. Matching compares whole characters, so it never splits an accented character or a CRLF pair. `replaceAll` replaces every occurrence instead. The match is checked inside the write transaction, so an edit to another part of the body since the agent's read does not conflict. Pass `expectedRevision` only to reject any intervening change.
+
 ## Architecture
 
 - `TixCore`: ticket model, deterministic graph layout, and GRDB-backed SQLite operations.
 - `TixApp`: SwiftUI workspace and editor around an AppKit `NSTableView`, with native row sizing and a graph gutter.
-- `TixMCP`: the official Swift MCP SDK with ten focused tools.
+- `TixMCP`: the official Swift MCP SDK with eleven focused tools.
 
 Both processes open the same file. GRDB write transactions acquire SQLite's write lock before checking conditions, so competing claims and dependency edits serialize safely. WAL allows readers alongside a writer. Foreign keys, checks, and a five-second busy timeout are enabled. A versioned migration creates tickets and prerequisite edges; revisions prevent stale editor saves. The app polls `data_version` on its persistent connection once a second while visible and refreshes on activation and local writes.
 

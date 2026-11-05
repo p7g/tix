@@ -190,21 +190,23 @@ struct TicketListPane: View {
             Divider()
             HStack {
                 Text(
-                    results != nil ? "\(rows.count) matches" : "\(model.tickets.count) tickets · \(model.tickets.filter(\.ready).count) ready"
+                    results != nil ? "\(rows.count) matches" : "\(model.tickets.count) tickets"
                 )
                 Spacer()
-                statusLegend("Ready", color: .green)
-                statusLegend("Active", color: .orange)
-                statusLegend("Blocked", color: .accentColor)
-                statusLegend("Done", color: Color(nsColor: .secondaryLabelColor))
+                let counts = Dictionary(
+                    grouping: model.tickets, by: \.statusCategory
+                ).mapValues(\.count)
+                ForEach(StatusCategory.allCases, id: \.self) {
+                    statusLegend($0, count: counts[$0] ?? 0)
+                }
             }.font(.caption).foregroundStyle(.secondary).padding(10)
         }
     }
 
-    private func statusLegend(_ title: String, color: Color) -> some View {
+    private func statusLegend(_ category: StatusCategory, count: Int) -> some View {
         HStack(spacing: 4) {
-            Circle().fill(color).frame(width: 6, height: 6)
-            Text(title)
+            Circle().fill(Color(nsColor: category.color)).frame(width: 6, height: 6)
+            Text("\(count) \(category.title)").monospacedDigit()
         }
     }
 }
