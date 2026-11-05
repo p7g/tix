@@ -4,14 +4,16 @@ import TixCore
 
 @MainActor final class TicketDraft: ObservableObject {
     @Published var title: String
+    @Published var priority: TicketPriority
     @Published var body: String
     @Published var latest: Ticket
     @Published var base: Ticket
-    var dirty: Bool { title != base.title || body != base.body }
+    var dirty: Bool { title != base.title || body != base.body || priority != base.priority }
     var conflicted: Bool { dirty && latest.revision != base.revision }
     init(_ ticket: Ticket) {
         title = ticket.title
         body = ticket.body
+        priority = ticket.priority
         latest = ticket
         base = ticket
     }
@@ -24,6 +26,7 @@ import TixCore
         latest = ticket
         title = ticket.title
         body = ticket.body
+        priority = ticket.priority
     }
 }
 
@@ -37,6 +40,13 @@ import TixCore
     @Published var mode = "Waves"
     @Published var newTicketRequest = 0
     @Published var showCompleted = false
+    @Published var searchQuery = "" {
+        didSet { searchRevision += 1 }
+    }
+    @Published private(set) var searchRevision = 0
+    var isSearching: Bool {
+        !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
     private var store: TicketStore?
     private var version: Int64?
     private var drafts: [Int64: TicketDraft] = [:]
@@ -57,9 +67,15 @@ import TixCore
         return draft
     }
     var lanes: LaneLayout {
-        (try? TicketGraph.lanes(tickets)) ?? LaneLayout(rows: [], width: 1)
+        let visible = showCompleted ? tickets : tickets.filter { $0.status != .done }
+        return (try? TicketGraph.lanes(visible)) ?? LaneLayout(rows: [], width: 1)
     }
     var displayRows: [DisplayRow] {
+        if isSearching {
+            return tickets.filter {
+                (showCompleted || $0.status != .done) && $0.matches(searchQuery)
+            }.map { DisplayRow(ticket: $0) }
+        }
         if mode == "Lanes" {
             return lanes.rows.map { DisplayRow(ticket: $0.ticket, lane: $0) }
         }
@@ -107,6 +123,7 @@ import TixCore
             self.path = next.path
             tickets = initial
             selection = nil
+            searchQuery = ""
             drafts = [:]
             version = initialVersion
             recent = [next.path] + recent.filter { $0 != next.path }
@@ -185,6 +202,7 @@ import TixCore
         do {
             let ticket = try store.create(title: title)
             refresh(force: true)
+            searchQuery = ""
             selection = ticket.id
             return true
         } catch {
@@ -199,6 +217,7 @@ import TixCore
                 draft.base.id,
                 title: draft.title,
                 body: draft.body,
+                priority: draft.priority,
                 expectedRevision: overwrite ? nil : draft.base.revision
             )
             draft.reload(ticket)

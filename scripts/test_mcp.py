@@ -58,13 +58,36 @@ class Client:
 def run(binary):
     with tempfile.TemporaryDirectory(prefix='tix-mcp-') as folder:
         database = pathlib.Path(folder) / 'tickets.sqlite'
-        # An existing empty SQLite file exercises the normal migration path.
-        sqlite3.connect(database).close()
+        # Seed a pre-priority workspace to verify migration preserves existing data.
+        with sqlite3.connect(database) as legacy:
+            legacy.executescript("""
+                CREATE TABLE grdb_migrations (identifier TEXT NOT NULL PRIMARY KEY);
+                INSERT INTO grdb_migrations VALUES ('v1');
+                CREATE TABLE tickets (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    title TEXT NOT NULL CHECK(length(trim(title)) > 0),
+                    body TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','active','done')),
+                    owner TEXT, createdAt REAL NOT NULL, updatedAt REAL NOT NULL,
+                    revision INTEGER NOT NULL DEFAULT 1
+                );
+                CREATE TABLE dependencies (
+                    ticket INTEGER NOT NULL REFERENCES tickets(id),
+                    prerequisite INTEGER NOT NULL REFERENCES tickets(id),
+                    PRIMARY KEY(ticket, prerequisite), CHECK(ticket != prerequisite)
+                );
+                CREATE INDEX dependencies_by_prerequisite ON dependencies(prerequisite);
+                INSERT INTO tickets(title, body, status, createdAt, updatedAt)
+                    VALUES ('Legacy ticket', 'Preserved body', 'done', 1, 1);
+            """)
         client = Client(binary, database)
         other = None
         try:
             tools = client.request('tools/list', {})['tools']
-            assert len(tools) == 10
+            assert len(tools) == 11
+            migrated = client.tool('get_ticket', id=1)['ticket']
+            assert migrated['priority'] == migrated['effectivePriority'] == 'normal'
+            assert migrated['body'] == 'Preserved body' and migrated['revision'] == 1
             a = client.tool('create_ticket', title='Define interface')['ticket']
             b = client.tool('create_ticket', title='Implement interface', body='Pass contract tests')['ticket']
             client.tool('add_dependency', id=b['id'], prerequisite=a['id'])
@@ -80,6 +103,18 @@ def run(binary):
             client.tool('edit_ticket', error=True, id=b['id'], title='Stale edit', expectedRevision=b['revision'])
             current = client.tool('get_ticket', id=b['id'])['ticket']
             client.tool('edit_ticket', id=b['id'], body='Updated details', expectedRevision=current['revision'])
+            # Partial body edits from two processes merge when they touch different text.
+            stale = client.tool('get_ticket', id=b['id'])['ticket']
+            other.tool('replace_in_ticket_body', id=b['id'], oldText='Updated', newText='Revised')
+            merged = client.tool('replace_in_ticket_body', id=b['id'], oldText='details', newText='details\n- [ ] docs')['ticket']
+            assert merged['body'] == 'Revised details\n- [ ] docs', merged
+            client.tool('replace_in_ticket_body', error=True, id=b['id'], oldText='Revised', newText='x', expectedRevision=stale['revision'])
+            missing = client.tool('replace_in_ticket_body', error=True, id=b['id'], oldText='absent', newText='x')
+            assert missing['code'] == 'invalid_operation' and 'not found' in missing['error'], missing
+            client.tool('replace_in_ticket_body', error=True, id=b['id'], oldText='e', newText='x')
+            client.tool('replace_in_ticket_body', error=True, id=b['id'], oldText='docs')
+            client.tool('replace_in_ticket_body', error=True, id=b['id'], oldText='docs', newText='x', replaceAll='yes')
+            assert client.tool('replace_in_ticket_body', id=b['id'], oldText='e', newText='E', replaceAll=True)['ticket']['body'] == 'REvisEd dEtails\n- [ ] docs'
             client.tool('add_dependency', error=True, id=a['id'], prerequisite=b['id'])
             client.tool('release_ticket', id=b['id'])
             client.tool('complete_ticket', id=b['id'])
@@ -92,6 +127,15 @@ def run(binary):
             client.tool('get_ticket', error=True, id=999)
             client.tool('create_ticket', error=True, title=' ')
             client.tool('create_ticket', error=True, title='Unexpected field', surprise=True)
+            assert a['priority'] == 'normal' and a['effectivePriority'] == 'normal'
+            urgent = client.tool('create_ticket', title='Urgent follow-up', priority='urgent')['ticket']
+            client.tool('add_dependency', id=urgent['id'], prerequisite=b['id'])
+            assert client.tool('get_ticket', id=b['id'])['ticket']['effectivePriority'] == 'urgent'
+            assert client.tool('list_tickets', ready=True)['tickets'][0]['id'] == b['id']
+            client.tool('edit_ticket', id=urgent['id'], priority='low')
+            assert other.tool('get_ticket', id=b['id'])['ticket']['effectivePriority'] == 'normal'
+            client.tool('create_ticket', error=True, title='Invalid', priority='critical')
+            client.tool('edit_ticket', error=True, id=b['id'], priority='critical')
             print('MCP smoke passed: initialization, tools, lifecycle, dependencies, conflicts, validation, two processes.')
         finally:
             if other:

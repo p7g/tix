@@ -39,8 +39,7 @@ import TixCore
 
 struct WorkspaceView: View {
     @ObservedObject var model: WorkspaceModel
-    @State private var newTitle = ""
-    @FocusState private var creating: Bool
+    @State private var showingNewTicket = false
     @Environment(\.scenePhase) private var scenePhase
     private let timer = Timer.publish(every: 1, on: .main, in: .common)
         .autoconnect()
@@ -49,36 +48,31 @@ struct WorkspaceView: View {
             if model.path == nil {
                 welcome
             } else {
-                HStack {
-                    TextField("New ticket title", text: $newTitle)
-                        .textFieldStyle(.roundedBorder).focused($creating)
-                        .onSubmit(createTicket)
-                    Button("Add Ticket", action: createTicket).disabled(
-                        newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-                            .isEmpty
-                    )
-                }.padding(12)
+                TicketSearchBar(model: model)
                 Divider()
                 HSplitView {
                     VStack(spacing: 0) {
                         TicketTable(
                             rows: model.displayRows,
-                            laneWidth: model.lanes.width,
-                            showsLanes: model.mode == "Lanes",
+                            laneWidth: model.mode == "Lanes" && !model.isSearching ? model.lanes.width : 1,
+                            showsLanes: model.mode == "Lanes" && !model.isSearching,
                             selection: $model.selection
                         )
+                        .overlay {
+                            if model.isSearching && model.displayRows.isEmpty {
+                                ContentUnavailableView.search(text: model.searchQuery)
+                            }
+                        }
                         Divider()
                         HStack {
                             Text(
-                                "\(model.tickets.count) tickets · \(model.tickets.filter(\.ready).count) ready"
+                                model.isSearching ? "\(model.displayRows.count) matches" : "\(model.tickets.count) tickets · \(model.tickets.filter(\.ready).count) ready"
                             )
                             Spacer()
-                            if model.mode == "Waves" {
-                                Toggle(
-                                    "Completed (\(model.tickets.filter { $0.status == .done }.count))",
-                                    isOn: $model.showCompleted
-                                ).toggleStyle(.checkbox)
-                            }
+                            statusLegend("Ready", color: .green)
+                            statusLegend("Active", color: .orange)
+                            statusLegend("Blocked", color: .accentColor)
+                            statusLegend("Done", color: Color(nsColor: .secondaryLabelColor))
                         }.font(.caption).foregroundStyle(.secondary).padding(10)
                     }.frame(minWidth: 630)
                     if let draft = model.selectedDraft {
@@ -124,17 +118,36 @@ struct WorkspaceView: View {
                 }
             }
             ToolbarItem {
+                Button { showingNewTicket = true } label: {
+                    Label("New Ticket", systemImage: "plus")
+                }
+                .help("New Ticket (⌘N)")
+                .disabled(model.path == nil)
+            }
+            ToolbarItem {
+                if model.path != nil {
+                    Toggle("Show done", isOn: $model.showCompleted)
+                        .toggleStyle(.checkbox)
+                }
+            }
+            ToolbarItem {
                 if model.path != nil {
                     Picker("View", selection: $model.mode) {
                         Text("Waves").tag("Waves")
                         Text("Lanes").tag("Lanes")
                     }
                     .pickerStyle(.segmented)
+                    .disabled(model.isSearching)
                 }
             }
         }
+        .sheet(isPresented: $showingNewTicket) {
+            NewTicketSheet(model: model)
+        }
         .onAppear { if model.path == nil { model.restore() } }
-        .onChange(of: model.newTicketRequest) { _, _ in creating = true }
+        .onChange(of: model.newTicketRequest) { _, _ in
+            if model.path != nil { showingNewTicket = true }
+        }
         .onReceive(timer) { _ in
             if NSApp.windows.contains(where: {
                 $0.isVisible && !$0.isMiniaturized
@@ -157,6 +170,13 @@ struct WorkspaceView: View {
             Text(model.error ?? "")
         }
     }
+    private func statusLegend(_ title: String, color: Color) -> some View {
+        HStack(spacing: 4) {
+            Circle().fill(color).frame(width: 6, height: 6)
+            Text(title)
+        }
+    }
+
     private var welcome: some View {
         VStack(spacing: 18) {
             Image(systemName: "ticket").font(.system(size: 44)).foregroundStyle(
@@ -172,10 +192,93 @@ struct WorkspaceView: View {
             }
         }.frame(maxWidth: .infinity, maxHeight: .infinity)
     }
+}
+
+/// Keep keystrokes local so the workspace and AppKit table only update after a pause.
+struct TicketSearchBar: View {
+    @ObservedObject var model: WorkspaceModel
+    @State private var text = ""
+
+    var body: some View {
+        HStack {
+            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+            TextField("Search tickets by title, ID, or description", text: $text)
+                .textFieldStyle(.plain)
+                .accessibilityLabel("Search tickets")
+                .onSubmit { model.searchQuery = text }
+            if !text.isEmpty {
+                Button {
+                    text = ""
+                    model.searchQuery = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                }.buttonStyle(.plain).help("Clear search")
+            }
+        }
+        .padding(12)
+        .onAppear { text = model.searchQuery }
+        .onChange(of: model.searchRevision) { _, _ in
+            // Also cancel pending text when navigation or creation resets the search,
+            // including when the committed query was already empty.
+            text = model.searchQuery
+        }
+        .task(id: text) {
+            guard text != model.searchQuery else { return }
+            let query = text
+            if !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                do {
+                    try await Task.sleep(for: .milliseconds(200))
+                } catch {
+                    return
+                }
+            }
+            guard !Task.isCancelled else { return }
+            model.searchQuery = query
+        }
+    }
+}
+
+struct NewTicketSheet: View {
+    @ObservedObject var model: WorkspaceModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var title = ""
+    @State private var creationError: String?
+    @FocusState private var titleFocused: Bool
+
+    private var validTitle: Bool {
+        !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("New Ticket").font(.title2.bold())
+            TextField("Ticket title", text: $title)
+                .textFieldStyle(.roundedBorder)
+                .focused($titleFocused)
+                .onSubmit(createTicket)
+            if let creationError {
+                Text(creationError).foregroundStyle(.red).font(.callout)
+            }
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Create Ticket", action: createTicket)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(!validTitle)
+            }
+        }
+        .padding(24)
+        .frame(width: 440)
+        .onAppear { titleFocused = true }
+    }
+
     private func createTicket() {
-        if model.createTicket(newTitle) {
-            newTitle = ""
-            creating = true
+        guard validTitle else { return }
+        if model.createTicket(title) {
+            dismiss()
+        } else {
+            creationError = model.error
+            model.error = nil
         }
     }
 }
@@ -200,6 +303,11 @@ struct TicketDetail: View {
                 TextField("Title", text: $draft.title).font(
                     .title3.weight(.semibold)
                 ).textFieldStyle(.roundedBorder)
+                Picker("Priority", selection: $draft.priority) {
+                    ForEach(TicketPriority.allCases, id: \.self) { priority in
+                        Text(priority.label).tag(priority)
+                    }
+                }
                 HStack {
                     Text("Description").font(.headline)
                     Spacer()
@@ -234,7 +342,7 @@ struct TicketDetail: View {
                             systemImage: "exclamationmark.triangle"
                         ).font(.headline)
                         Text(
-                            "Your draft is preserved. Reload the current ticket or explicitly overwrite its title and description."
+                            "Your draft is preserved. Reload the current ticket or explicitly overwrite its title, description, and priority."
                         ).font(.caption)
                         HStack {
                             Button("Reload") { draft.reload() }
@@ -360,6 +468,7 @@ struct TicketDetail: View {
             if model.tickets.first(where: { $0.id == id })?.status == .done {
                 model.showCompleted = true
             }
+            model.searchQuery = ""
             model.selection = id
         } label: {
             Text(

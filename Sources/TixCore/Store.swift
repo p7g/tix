@@ -44,6 +44,9 @@ public final class TicketStore: Sendable {
                     """
             )
         }
+        migrator.registerMigration("v2_priority") { db in
+            try db.execute(sql: "ALTER TABLE tickets ADD COLUMN priority TEXT NOT NULL DEFAULT 'normal' CHECK(priority IN ('urgent','high','normal','low'))")
+        }
         try migrator.migrate(queue)
     }
 
@@ -68,7 +71,7 @@ public final class TicketStore: Sendable {
         try queue.read { try Self.ticket($0, id) }
     }
 
-    @discardableResult public func create(title: String, body: String = "")
+    @discardableResult public func create(title: String, body: String = "", priority: TicketPriority = .normal)
         throws -> Ticket
     {
         let title = try Self.validText(title, field: "Title")
@@ -76,8 +79,8 @@ public final class TicketStore: Sendable {
             let now = Date().timeIntervalSince1970
             try db.execute(
                 sql:
-                    "INSERT INTO tickets(title, body, createdAt, updatedAt) VALUES (?, ?, ?, ?)",
-                arguments: [title, body, now, now]
+                    "INSERT INTO tickets(title, body, priority, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?)",
+                arguments: [title, body, priority.rawValue, now, now]
             )
             return try Self.ticket(db, db.lastInsertedRowID)
         }
@@ -88,6 +91,7 @@ public final class TicketStore: Sendable {
         _ id: Int64,
         title: String? = nil,
         body: String? = nil,
+        priority: TicketPriority? = nil,
         expectedRevision: Int64? = nil
     ) throws -> Ticket {
         let cleanTitle = try title.map {
@@ -100,11 +104,69 @@ public final class TicketStore: Sendable {
             }
             try db.execute(
                 sql:
-                    "UPDATE tickets SET title = ?, body = ?, updatedAt = ?, revision = revision + 1 WHERE id = ?",
+                    "UPDATE tickets SET title = ?, body = ?, priority = ?, updatedAt = ?, revision = revision + 1 WHERE id = ?",
                 arguments: [
                     cleanTitle ?? current.title, body ?? current.body,
+                    (priority ?? current.priority).rawValue,
                     Date().timeIntervalSince1970, id,
                 ]
+            )
+            return try Self.ticket(db, id)
+        }
+    }
+
+    /// Replaces `oldText` with `newText` in the ticket's body and returns the
+    /// updated ticket. Matching is exact, case-sensitive, and compares whole
+    /// characters, so a match never splits a character such as "é" or "\r\n".
+    /// Raises `TixError.invalid` unless `oldText` occurs exactly once, counting
+    /// overlapping occurrences. With `replaceAll`, replaces every
+    /// non-overlapping occurrence and raises only if there are none. Raises
+    /// `TixError.conflict` if `expectedRevision` is supplied and stale.
+    @discardableResult public func replaceInBody(
+        _ id: Int64,
+        oldText: String,
+        newText: String,
+        replaceAll: Bool = false,
+        expectedRevision: Int64? = nil
+    ) throws -> Ticket {
+        guard !oldText.isEmpty else {
+            throw TixError.invalid("oldText must not be empty. Use edit_ticket to set the whole body.")
+        }
+        guard oldText != newText else {
+            throw TixError.invalid("newText is identical to oldText.")
+        }
+        return try queue.write { db in
+            // Match against the body read inside this write transaction. The
+            // match then acts as the precondition, so a concurrent edit to
+            // another part of the body does not invalidate this one. Requiring
+            // expectedRevision would reject those harmless edits as well.
+            let current = try Self.ticket(db, id)
+            if let expectedRevision, current.revision != expectedRevision {
+                throw TixError.conflict(current)
+            }
+            let body = current.body
+            guard let first = body.firstRange(of: oldText) else {
+                throw TixError.invalid(
+                    "oldText was not found in the body of \(current.displayID). It must match exactly, including whitespace and line breaks. Call get_ticket to read the current body."
+                )
+            }
+            let updated: String
+            if replaceAll {
+                updated = body.replacing(oldText, with: newText)
+            } else {
+                // Search again from one character past the start of the first
+                // match, so that overlapping occurrences also count as ambiguous.
+                if body[body.index(after: first.lowerBound)...].firstRange(of: oldText) != nil {
+                    let count = body.ranges(of: oldText).count
+                    throw TixError.invalid(
+                        "oldText matches \(max(count, 2)) places in the body of \(current.displayID). Include more surrounding text to identify one, or set replaceAll."
+                    )
+                }
+                updated = body.replacingCharacters(in: first, with: newText)
+            }
+            try db.execute(
+                sql: "UPDATE tickets SET body = ?, updatedAt = ?, revision = revision + 1 WHERE id = ?",
+                arguments: [updated, Date().timeIntervalSince1970, id]
             )
             return try Self.ticket(db, id)
         }
@@ -277,7 +339,7 @@ public final class TicketStore: Sendable {
             prerequisites[ticket, default: []].append(prerequisite)
             dependents[prerequisite, default: []].append(ticket)
         }
-        return rows.map { row in
+        return try TicketGraph.prioritized(rows.map { row in
             let id: Int64 = row["id"]
             let deps = prerequisites[id] ?? []
             return Ticket(
@@ -285,6 +347,7 @@ public final class TicketStore: Sendable {
                 title: row["title"],
                 body: row["body"],
                 status: TicketStatus(rawValue: row["status"])!,
+                priority: TicketPriority(rawValue: row["priority"])!,
                 owner: row["owner"],
                 createdAt: row["createdAt"],
                 updatedAt: row["updatedAt"],
@@ -293,6 +356,6 @@ public final class TicketStore: Sendable {
                 dependents: dependents[id] ?? [],
                 blockers: deps.filter { !completed.contains($0) }
             )
-        }
+        })
     }
 }

@@ -1,17 +1,64 @@
 import Foundation
+import Logging
 import MCP
 import TixCore
+
+/// The MCP Swift SDK 0.12.x models `capabilities.experimental` as a string map,
+/// while Codex correctly sends extension values as JSON objects. The server does
+/// not use client experimental capabilities, so remove only that incompatible
+/// field before the SDK decodes the initialization request.
+actor CodexCompatibleStdioTransport: Transport {
+    private let base = StdioTransport()
+    nonisolated let logger: Logger
+
+    init() {
+        logger = base.logger
+    }
+
+    func connect() async throws { try await base.connect() }
+    func disconnect() async { await base.disconnect() }
+    func send(_ data: Data) async throws { try await base.send(data) }
+
+    func receive() -> AsyncThrowingStream<Data, Error> {
+        AsyncThrowingStream { continuation in
+            Task {
+                do {
+                    for try await data in await base.receive() {
+                        continuation.yield(sanitize(data))
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+        }
+    }
+
+    private func sanitize(_ data: Data) -> Data {
+        guard var message = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              message["method"] as? String == "initialize",
+              var parameters = message["params"] as? [String: Any],
+              var capabilities = parameters["capabilities"] as? [String: Any],
+              capabilities["experimental"] is [String: Any] else { return data }
+        capabilities.removeValue(forKey: "experimental")
+        parameters["capabilities"] = capabilities
+        message["params"] = parameters
+        return (try? JSONSerialization.data(withJSONObject: message)) ?? data
+    }
+}
 
 func schema(_ properties: [String: Value], required: [String] = []) -> Value {
     .object(["type": .string("object"), "properties": .object(properties), "required": .array(required.map(Value.string)), "additionalProperties": .bool(false)])
 }
 let string: Value = .object(["type": .string("string")])
 let integer: Value = .object(["type": .string("integer"), "minimum": .int(1)])
+let prioritySchema: Value = .object(["type": .string("string"), "enum": .array(TicketPriority.allCases.map { .string($0.rawValue) })])
 let tools: [Tool] = [
-    Tool(name: "list_tickets", description: "List tickets with optional status and readiness filters. Ready means open with all prerequisites done.", inputSchema: schema(["status": .object(["type": .string("string"), "enum": .array([.string("open"), .string("active"), .string("done")])]), "ready": .object(["type": .string("boolean")])])),
+    Tool(name: "list_tickets", description: "List tickets ordered by effective priority, then oldest first, with optional status and readiness filters. Ready means open with all prerequisites done.", inputSchema: schema(["status": .object(["type": .string("string"), "enum": .array([.string("open"), .string("active"), .string("done")])]), "ready": .object(["type": .string("boolean")])])),
     Tool(name: "get_ticket", description: "Read a ticket including revision, prerequisite, dependent, and blocker IDs.", inputSchema: schema(["id": integer], required: ["id"])),
-    Tool(name: "create_ticket", description: "Create an open ticket. Only a title is required.", inputSchema: schema(["title": string, "body": string], required: ["title"])),
-    Tool(name: "edit_ticket", description: "Edit title or Markdown body. Supply expectedRevision from get_ticket to reject stale edits; omit only for deliberate overwrite.", inputSchema: schema(["id": integer, "title": string, "body": string, "expectedRevision": integer], required: ["id"])),
+    Tool(name: "create_ticket", description: "Create an open ticket. Only a title is required.", inputSchema: schema(["title": string, "body": string, "priority": prioritySchema], required: ["title"])),
+    Tool(name: "edit_ticket", description: "Edit title, Markdown body, or priority. Supplying body replaces the whole body; use replace_in_ticket_body to change part of it. Supply expectedRevision from get_ticket to reject stale edits; omit only for deliberate overwrite.", inputSchema: schema(["id": integer, "title": string, "body": string, "priority": prioritySchema, "expectedRevision": integer], required: ["id"])),
+    Tool(name: "replace_in_ticket_body", description: "Replace oldText with newText in a ticket's Markdown body. oldText must match the current body exactly, including whitespace and line breaks, and must occur exactly once; include surrounding text to make it unique. Set replaceAll to replace every occurrence instead. An empty newText deletes oldText. Edits elsewhere in the body since your read do not conflict; supply expectedRevision only to reject any intervening change.", inputSchema: schema(["id": integer, "oldText": string, "newText": string, "replaceAll": .object(["type": .string("boolean")]), "expectedRevision": integer], required: ["id", "oldText", "newText"])),
     Tool(name: "add_dependency", description: "Make id depend on prerequisite. Rejects cycles and duplicate edges.", inputSchema: schema(["id": integer, "prerequisite": integer], required: ["id", "prerequisite"])),
     Tool(name: "remove_dependency", description: "Remove a declared prerequisite from a ticket.", inputSchema: schema(["id": integer, "prerequisite": integer], required: ["id", "prerequisite"])),
     Tool(name: "claim_ticket", description: "Atomically claim a ready ticket for owner and mark it active. Conflicts return current ticket state.", inputSchema: schema(["id": integer, "owner": string], required: ["id", "owner"])),
@@ -45,6 +92,8 @@ func handle(_ params: CallTool.Parameters, store: TicketStore) throws -> CallToo
     for key in tool.inputSchema.objectValue!["required"]!.arrayValue!.compactMap(\.stringValue) where args[key] == nil {
         throw TixError.invalid("Missing required argument: \(key)")
     }
+    let priority = args["priority"]?.stringValue.flatMap(TicketPriority.init(rawValue:))
+    if args["priority"] != nil && priority == nil { throw TixError.invalid("Priority must be urgent, high, normal, or low.") }
     let id = Int64(args["id"]?.intValue ?? 0)
     let ticket: Ticket
     switch params.name {
@@ -53,10 +102,12 @@ func handle(_ params: CallTool.Parameters, store: TicketStore) throws -> CallToo
         if args["status"] != nil && status == nil { throw TixError.invalid("Status must be open, active, or done.") }
         return try result(.object(["tickets": .array(try store.list(status: status, ready: args["ready"]?.boolValue).map(ticketValue))]))
     case "get_ticket": ticket = try store.get(id)
-    case "create_ticket": ticket = try store.create(title: args["title"]!.stringValue!, body: args["body"]?.stringValue ?? "")
+    case "create_ticket": ticket = try store.create(title: args["title"]!.stringValue!, body: args["body"]?.stringValue ?? "", priority: priority ?? .normal)
     case "edit_ticket":
-        guard args["title"] != nil || args["body"] != nil else { throw TixError.invalid("Supply title or body to edit.") }
-        ticket = try store.edit(id, title: args["title"]?.stringValue, body: args["body"]?.stringValue, expectedRevision: args["expectedRevision"]?.intValue.map(Int64.init))
+        guard args["title"] != nil || args["body"] != nil || priority != nil else { throw TixError.invalid("Supply title, body, or priority to edit.") }
+        ticket = try store.edit(id, title: args["title"]?.stringValue, body: args["body"]?.stringValue, priority: priority, expectedRevision: args["expectedRevision"]?.intValue.map(Int64.init))
+    case "replace_in_ticket_body":
+        ticket = try store.replaceInBody(id, oldText: args["oldText"]!.stringValue!, newText: args["newText"]!.stringValue!, replaceAll: args["replaceAll"]?.boolValue ?? false, expectedRevision: args["expectedRevision"]?.intValue.map(Int64.init))
     case "add_dependency": ticket = try store.addDependency(id, prerequisite: Int64(args["prerequisite"]!.intValue!))
     case "remove_dependency": ticket = try store.removeDependency(id, prerequisite: Int64(args["prerequisite"]!.intValue!))
     case "claim_ticket": ticket = try store.claim(id, owner: args["owner"]!.stringValue!)
@@ -87,7 +138,7 @@ if arguments == ["--help"] {
                 return try result(.object(["error": .string(error.localizedDescription), "code": .string("invalid_operation")]), isError: true)
             }
         }
-        try await server.start(transport: StdioTransport())
+        try await server.start(transport: CodexCompatibleStdioTransport())
         await server.waitUntilCompleted()
     } catch {
         FileHandle.standardError.write(Data("tix-mcp: \(error.localizedDescription)\n".utf8))

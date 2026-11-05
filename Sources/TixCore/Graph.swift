@@ -4,11 +4,20 @@ public enum TicketStatus: String, Codable, CaseIterable, Sendable {
     case open, active, done
 }
 
+public enum TicketPriority: String, Codable, CaseIterable, Sendable {
+    case urgent, high, normal, low
+
+    public var rank: Int { Self.allCases.firstIndex(of: self)! }
+    public var label: String { rawValue.capitalized }
+}
+
 public struct Ticket: Codable, Identifiable, Equatable, Sendable {
     public var id: Int64
     public var title: String
     public var body: String
     public var status: TicketStatus
+    public var priority: TicketPriority
+    public var effectivePriority: TicketPriority
     public var owner: String?
     public var createdAt: Double
     public var updatedAt: Double
@@ -24,6 +33,7 @@ public struct Ticket: Codable, Identifiable, Equatable, Sendable {
         title: String = "",
         body: String = "",
         status: TicketStatus = .open,
+        priority: TicketPriority = .normal,
         owner: String? = nil,
         createdAt: Double = 0,
         updatedAt: Double = 0,
@@ -36,6 +46,8 @@ public struct Ticket: Codable, Identifiable, Equatable, Sendable {
         self.title = title
         self.body = body
         self.status = status
+        self.priority = priority
+        self.effectivePriority = priority
         self.owner = owner
         self.createdAt = createdAt
         self.updatedAt = updatedAt
@@ -73,9 +85,39 @@ public struct LaneLayout: Equatable, Sendable {
 }
 
 public enum TicketGraph {
+    /// Propagate urgency backward through unfinished dependencies, without summing branches.
+    public static func prioritized(_ tickets: [Ticket]) throws -> [Ticket] {
+        let order = try topological(tickets)
+        var byID = Dictionary(uniqueKeysWithValues: tickets.map { ticket in
+            var ticket = ticket
+            ticket.effectivePriority = ticket.priority
+            return (ticket.id, ticket)
+        })
+        for ticket in order.reversed() where ticket.status != .done {
+            let priority = byID[ticket.id]!.effectivePriority
+            for id in ticket.prerequisites {
+                guard var parent = byID[id], parent.status != .done else { continue }
+                if priority.rank < parent.effectivePriority.rank {
+                    parent.effectivePriority = priority
+                    byID[id] = parent
+                }
+            }
+        }
+        return byID.values.sorted(by: precedes)
+    }
+
+    public static func precedes(_ lhs: Ticket, _ rhs: Ticket) -> Bool {
+        (lhs.effectivePriority.rank, lhs.createdAt, lhs.id)
+            < (rhs.effectivePriority.rank, rhs.createdAt, rhs.id)
+    }
+
     public static func ordered(_ tickets: [Ticket]) throws -> [Ticket] {
+        try topological(prioritized(tickets), byPriority: true)
+    }
+
+    private static func topological(_ tickets: [Ticket], byPriority: Bool = false) throws -> [Ticket] {
         let ids = Set(tickets.map(\.id))
-        var remaining = tickets.sorted { $0.id < $1.id }
+        var remaining = byPriority ? tickets.sorted(by: precedes) : tickets.sorted { $0.id < $1.id }
         var emitted = Set<Int64>()
         var result: [Ticket] = []
         while !remaining.isEmpty {
@@ -96,7 +138,7 @@ public enum TicketGraph {
     }
 
     public static func waves(_ tickets: [Ticket]) throws -> [Wave] {
-        let unfinished = tickets.filter { $0.status != .done }
+        let unfinished = try prioritized(tickets).filter { $0.status != .done }
         var depths: [Int64: Int] = [:]
         for ticket in try ordered(unfinished) {
             depths[ticket.id] =
@@ -105,18 +147,16 @@ public enum TicketGraph {
         return Set(depths.values).sorted().map { depth in
             Wave(
                 id: depth,
-                tickets: unfinished.filter { depths[$0.id] == depth }.sorted {
-                    $0.id < $1.id
-                }
+                tickets: unfinished.filter { depths[$0.id] == depth }.sorted(by: precedes)
             )
         }
     }
 
     public static func lanes(_ tickets: [Ticket]) throws -> LaneLayout {
-        let layouts = try connectedGroups(tickets).map { group in
+        let layouts = try connectedGroups(prioritized(tickets)).map { group in
             let baseline = makeLanes(try ordered(group))
             // Favoring narrower branches helps some joins but can leave a root
-            // waiting on others. Try both tie-breaks, retaining the ID baseline
+            // waiting on others. Try both tie-breaks, retaining the priority baseline
             // whenever it uses fewer lanes, shorter tracks, or less travel.
             return try [false, true].reduce(baseline) {
                 best,
@@ -188,7 +228,9 @@ public enum TicketGraph {
             }
             guard
                 let index = ready.min(by: {
-                    score(remaining[$0]) < score(remaining[$1])
+                    remaining[$0].effectivePriority.rank != remaining[$1].effectivePriority.rank
+                        ? remaining[$0].effectivePriority.rank < remaining[$1].effectivePriority.rank
+                        : score(remaining[$0]) < score(remaining[$1])
                 })
             else {
                 throw TixError.invalid("Dependencies contain a cycle.")
@@ -277,7 +319,7 @@ public enum TicketGraph {
     }
 
     /// Keep independent graphs contiguous. Both edge directions matter: two roots
-    /// that eventually join belong to the same group. IDs stabilize group order.
+    /// that eventually join belong to the same group. Priority and age order groups.
     private static func connectedGroups(_ tickets: [Ticket]) -> [[Ticket]] {
         let byID = Dictionary(uniqueKeysWithValues: tickets.map { ($0.id, $0) })
         var neighbors: [Int64: Set<Int64>] = [:]
@@ -302,7 +344,7 @@ public enum TicketGraph {
             }
             groups.append(group)
         }
-        return groups
+        return groups.sorted { precedes($0.sorted(by: precedes)[0], $1.sorted(by: precedes)[0]) }
     }
 }
 

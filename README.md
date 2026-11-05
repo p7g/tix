@@ -23,19 +23,24 @@ Point every agent working on that ticket collection at the same absolute databas
 
 ## Ticket workflow
 
-- Enter a title and press Return to create a ticket; Command-N focuses the entry field.
+- Search by title, ID (such as TIX-123 or 123), or description. Every space-separated term must match; matching ignores case and accents and supports partial words. Results appear as a flat list and respect **Show done**. Clear search to return to Waves/Lanes.
+- Click the header **+** button or press Command-N to open New Ticket. Enter a title and press Return to create it, or Escape to cancel.
 - Select a row to edit its title and Markdown description. Command-S saves. Preview displays inline Markdown formatting with preserved line breaks.
 - Add prerequisites in the detail pane. Links navigate to related tickets; the minus button removes a prerequisite.
 - **Claim** a ready ticket with an owner name. **Release** returns active work to open; **Complete** marks it done; **Reopen** clears the owner and returns it to open.
-- Drafts survive switching rows. If another process changes a ticket you are editing, explicitly **Reload** or **Overwrite** its title and description. Saving normally checks the ticket revision atomically.
+- Drafts survive switching rows. If another process changes a ticket you are editing, explicitly **Reload** or **Overwrite** its title, description, and priority. Saving normally checks the ticket revision atomically.
 
 An open ticket is ready when all its prerequisites are done. Active work remains active if a prerequisite is reopened or added; its blockers are shown. Completing work is an explicit action and is permitted even if prerequisites remain unfinished. Owner names are coordination metadata, not authorization.
 
-**Waves:** unfinished tickets are grouped by longest unfinished prerequisite chain. Completed prerequisites cut the chain. Active tickets stay in their layer. Completed tickets have a collapsible section.
+Done tickets are hidden by default in both views. Check **Show done**, to the left of the Waves/Lanes toggle, to include them.
 
-**Lanes:** every ticket, including completed tickets, appears in stable topological order within its connected group. Independent groups stay together, ordered by their lowest ticket ID; standalone tickets never interrupt another group's tracks. Tracks branch and join in the left gutter. A bridge/gap at an intermediate crossing means no connection; a dot identifies the row's ticket. Rows cannot be independently sorted because their order carries graph meaning.
+**Priority:** Urgent, High, Normal (default), or Low. Set it in the ticket detail picker. Unfinished prerequisites inherit the highest priority anywhere in their unfinished dependent chain; completion cuts inheritance. The Priority column shows effective priority, with ↑ for an inherited boost. Hover for the assigned level. Lists and waves sort by effective priority, then oldest creation time and ID. Existing workspaces migrate automatically to Normal.
 
-Within each group, deterministic heuristics favor closing open tracks and finishing nearby branches, trying two tie-breaks for branching tickets. Tix compares those layouts with ID-based topological ordering and chooses by lane count, total vertical track length, then horizontal travel. This keeps the best of three candidates without an expensive search for a global optimum. Waves retain their existing ordering.
+**Waves:** unfinished tickets are grouped by longest unfinished prerequisite chain. Completed prerequisites cut the chain. Active tickets stay in their layer. When shown, completed tickets appear in a separate section.
+
+**Lanes:** each visible ticket appears in stable topological order within its connected group. Independent groups stay together, ordered by their highest effective priority, then oldest ticket at that priority; standalone tickets never interrupt another group's tracks. Tracks branch and join in the left gutter. A bridge/gap at an intermediate crossing means no connection; a dot identifies the row's ticket. Rows cannot be independently sorted because their order carries graph meaning.
+
+Within each group, eligible tickets with higher effective priority come first. For ties, deterministic heuristics favor closing open tracks and finishing nearby branches, trying two tie-breaks for branching tickets. Tix compares those layouts with priority-based topological ordering and chooses by lane count, total vertical track length, then horizontal travel. This keeps the best of three candidates without an expensive search for a global optimum.
 
 Readiness represents declared dependencies only. Tix does not inspect source files, predict code conflicts, launch agents, or manage branches.
 
@@ -60,8 +65,9 @@ Adapt the surrounding configuration format to your client. Both paths must be ab
 | --- | --- |
 | `list_tickets` | optional `status` (`open`, `active`, `done`), `ready` (boolean) |
 | `get_ticket` | `id` |
-| `create_ticket` | `title`, optional `body` |
-| `edit_ticket` | `id`, `title` and/or `body`, optional `expectedRevision` |
+| `create_ticket` | `title`, optional `body`, `priority` |
+| `edit_ticket` | `id`, `title`, `body`, and/or `priority`, optional `expectedRevision` |
+| `replace_in_ticket_body` | `id`, `oldText`, `newText`, optional `replaceAll` (boolean), `expectedRevision` |
 | `add_dependency` / `remove_dependency` | `id`, `prerequisite` |
 | `claim_ticket` | `id`, `owner` |
 | `release_ticket` / `complete_ticket` / `reopen_ticket` | `id` |
@@ -70,11 +76,13 @@ IDs are positive integers on the wire, displayed as `TIX-123` in the UI. Results
 
 Agents should read before editing and pass `expectedRevision`. Omitting it explicitly overwrites the supplied fields. Claims are atomic: exactly one competing claimant wins. No automatic lease expiration or agent liveness detection is performed.
 
+To change part of a description, use `replace_in_ticket_body` rather than resending the whole body. `oldText` must match the current body exactly and occur once (overlapping occurrences count); otherwise the edit fails and the body is unchanged. Matching compares whole characters, so it never splits an accented character or a CRLF pair. `replaceAll` replaces every occurrence instead. The match is checked inside the write transaction, so an edit to another part of the body since the agent's read does not conflict. Pass `expectedRevision` only to reject any intervening change.
+
 ## Architecture
 
 - `TixCore`: ticket model, deterministic graph layout, and GRDB-backed SQLite operations.
 - `TixApp`: SwiftUI workspace and editor around an AppKit `NSTableView`, with native row sizing and a graph gutter.
-- `TixMCP`: the official Swift MCP SDK with ten focused tools.
+- `TixMCP`: the official Swift MCP SDK with eleven focused tools.
 
 Both processes open the same file. GRDB write transactions acquire SQLite's write lock before checking conditions, so competing claims and dependency edits serialize safely. WAL allows readers alongside a writer. Foreign keys, checks, and a five-second busy timeout are enabled. A versioned migration creates tickets and prerequisite edges; revisions prevent stale editor saves. The app polls `data_version` on its persistent connection once a second while visible and refreshes on activation and local writes.
 
