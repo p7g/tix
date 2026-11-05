@@ -67,6 +67,39 @@ struct StoreTests {
         let overwritten = try store.edit(ticket.id, title: "Human draft", body: "Explicit overwrite")
         #expect(overwritten.revision == ticket.revision + 2)
     }
+    @Test func replaceInBody() throws {
+        let (store, folder) = try workspace(); defer { try? FileManager.default.removeItem(atPath: folder) }
+        let other = try TicketStore(path: store.path)
+        let ticket = try store.create(title: "Spec", body: "## Steps\n- write tests\n- ship\n\nNotes: ship it")
+        let edited = try store.replaceInBody(ticket.id, oldText: "- write tests\n", newText: "- write tests\n- review\n")
+        #expect(edited.body == "## Steps\n- write tests\n- review\n- ship\n\nNotes: ship it")
+        #expect(edited.revision == ticket.revision + 1)
+        // Reject missing, ambiguous, empty, and no-op targets without writing.
+        for (oldText, newText) in [("- deploy", "x"), ("ship", "x"), ("", "x"), ("Notes", "Notes")] {
+            #expect(throws: TixError.self) { try store.replaceInBody(ticket.id, oldText: oldText, newText: newText) }
+        }
+        #expect(try store.get(ticket.id) == edited)
+        // A concurrent edit to another part of the body does not block the replacement.
+        try other.replaceInBody(ticket.id, oldText: "## Steps", newText: "## Plan")
+        let merged = try store.replaceInBody(ticket.id, oldText: "Notes: ship it", newText: "")
+        #expect(merged.body == "## Plan\n- write tests\n- review\n- ship\n\n")
+        #expect(throws: TixError.self) {
+            try store.replaceInBody(ticket.id, oldText: "## Plan", newText: "## Steps", expectedRevision: edited.revision)
+        }
+        #expect(try store.replaceInBody(ticket.id, oldText: "- ", newText: "* ", replaceAll: true).body == "## Plan\n* write tests\n* review\n* ship\n\n")
+        #expect(throws: TixError.self) { try store.replaceInBody(ticket.id, oldText: "absent", newText: "x", replaceAll: true) }
+    }
+    @Test func replaceInBodyMatchesWholeCharacters() throws {
+        let (store, folder) = try workspace(); defer { try? FileManager.default.removeItem(atPath: folder) }
+        // Count overlapping occurrences as ambiguous.
+        let repeated = try store.create(title: "Overlap", body: "aaa")
+        #expect(throws: TixError.self) { try store.replaceInBody(repeated.id, oldText: "aa", newText: "b") }
+        // Never split a combining sequence or a CRLF pair.
+        let accented = try store.create(title: "Accents", body: "cafe\u{301}\r\nend")
+        #expect(throws: TixError.self) { try store.replaceInBody(accented.id, oldText: "cafe", newText: "tea") }
+        #expect(throws: TixError.self) { try store.replaceInBody(accented.id, oldText: "\r", newText: "") }
+        #expect(try store.replaceInBody(accented.id, oldText: "caf\u{E9}", newText: "tea").body == "tea\r\nend")
+    }
     @Test func competingClaims() async throws {
         let (store, folder) = try workspace(); defer { try? FileManager.default.removeItem(atPath: folder) }
         let other = try TicketStore(path: store.path)
