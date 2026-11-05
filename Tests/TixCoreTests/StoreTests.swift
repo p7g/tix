@@ -22,6 +22,22 @@ struct StoreTests {
         #expect(!ticket.matches("\"quoted\""))
     }
 
+    @Test func searchIndexMatchesInOrder() throws {
+        let tickets = [
+            Ticket(id: 3, title: "Résumé parser", body: "Handle PDFs"),
+            Ticket(id: 1, title: "Login", body: "Fix the RESUME link"),
+            Ticket(id: 2, title: "Unrelated"),
+        ]
+        let index = TicketSearchIndex(tickets)
+        #expect(try index.tickets(matching: "resume").map(\.id) == [3, 1])
+        #expect(try index.tickets(matching: "resume pdf").map(\.id) == [3])
+        #expect(try index.tickets(matching: "tix-2").map(\.id) == [2])
+        #expect(try index.tickets(matching: " ").map(\.id) == [3, 1, 2])
+        // Terms never span fields.
+        #expect(try index.tickets(matching: "parserhandle").isEmpty)
+        #expect(try index.tickets(matching: "parser\nhandle").map(\.id) == [3])
+    }
+
     @Test func lifecycleAndDependencies() throws {
         let (store, folder) = try workspace(); defer { try? FileManager.default.removeItem(atPath: folder) }
         let a = try store.create(title: " A ", body: "**Done means** passing tests")
