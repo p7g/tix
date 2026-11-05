@@ -244,17 +244,42 @@ final class LaneCell: NSView {
     }
 }
 
-extension Ticket {
-    var statusColor: NSColor {
-        status == .done ? .secondaryLabelColor
-            : ready ? .systemGreen
-            : status == .active ? .systemOrange : .controlAccentColor
+/// The status groups the app shows, in footer order. Every ticket belongs to
+/// exactly one group.
+enum StatusCategory: CaseIterable {
+    case ready, active, blocked, done
+
+    var title: String {
+        switch self {
+        case .ready: "Ready"
+        case .active: "Active"
+        case .blocked: "Blocked"
+        case .done: "Done"
+        }
     }
 
+    var color: NSColor {
+        switch self {
+        case .ready: .systemGreen
+        case .active: .systemOrange
+        case .blocked: .controlAccentColor
+        case .done: .secondaryLabelColor
+        }
+    }
+}
+
+extension Ticket {
+    var statusCategory: StatusCategory {
+        status == .done ? .done
+            : ready ? .ready
+            : status == .active ? .active
+            : .blocked
+    }
+
+    var statusColor: NSColor { statusCategory.color }
+
     var statusLabel: String {
-        status == .done ? "Done"
-            : ready ? "Ready"
-            : status == .active ? (blockers.isEmpty ? "Active" : "Active · blocked")
-            : "Blocked"
+        statusCategory == .active && !blockers.isEmpty
+            ? "Active · blocked" : statusCategory.title
     }
 }
