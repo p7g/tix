@@ -275,11 +275,53 @@ struct NewTicketSheet: View {
     }
 }
 
+/// Offers every other ticket as a new prerequisite of `ticketID`. Re-renders only when
+/// `tickets`, `ticketID`, or `prerequisites` change.
+struct PrerequisitePicker: View, Equatable {
+    // Hold the model without observing it. Observing would re-render the picker on
+    // every model change, and the detail pane would re-render it on every draft
+    // keystroke; rebuilding one menu item per ticket costs tens of milliseconds.
+    let model: WorkspaceModel
+    let tickets: [Ticket]
+    let ticketID: Int64
+    let prerequisites: [Int64]
+    @State private var prerequisite: Int64?
+
+    // Compare only the inputs that `body` displays. `model` is the same object for the
+    // picker's whole lifetime.
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.ticketID == rhs.ticketID && lhs.prerequisites == rhs.prerequisites
+            && lhs.tickets == rhs.tickets
+    }
+
+    var body: some View {
+        HStack {
+            Picker("Add prerequisite", selection: $prerequisite) {
+                Text("Choose ticket…").tag(nil as Int64?)
+                ForEach(
+                    tickets.filter {
+                        $0.id != ticketID && !prerequisites.contains($0.id)
+                    }
+                ) { ticket in
+                    Text("\(ticket.displayID) · \(ticket.title)").tag(
+                        Optional(ticket.id)
+                    )
+                }
+            }.labelsHidden()
+            Button("Add") {
+                if let prerequisite {
+                    model.dependency(ticketID, prerequisite: prerequisite, add: true)
+                    self.prerequisite = nil
+                }
+            }.disabled(prerequisite == nil)
+        }
+    }
+}
+
 struct TicketDetail: View {
     @ObservedObject var model: WorkspaceModel
     @ObservedObject var draft: TicketDraft
     @State private var owner = NSUserName()
-    @State private var prerequisite: Int64?
     @State private var preview = false
     var body: some View {
         ScrollView {
@@ -419,33 +461,12 @@ struct TicketDetail: View {
                         }.buttonStyle(.borderless).help("Remove prerequisite")
                     }
                 }
-                HStack {
-                    Picker("Add prerequisite", selection: $prerequisite) {
-                        Text("Choose ticket…").tag(nil as Int64?)
-                        ForEach(
-                            model.tickets.filter {
-                                $0.id != draft.latest.id
-                                    && !draft.latest.prerequisites.contains(
-                                        $0.id
-                                    )
-                            }
-                        ) { ticket in
-                            Text("\(ticket.displayID) · \(ticket.title)").tag(
-                                Optional(ticket.id)
-                            )
-                        }
-                    }.labelsHidden()
-                    Button("Add") {
-                        if let prerequisite {
-                            model.dependency(
-                                draft.latest.id,
-                                prerequisite: prerequisite,
-                                add: true
-                            )
-                            self.prerequisite = nil
-                        }
-                    }.disabled(prerequisite == nil)
-                }
+                PrerequisitePicker(
+                    model: model,
+                    tickets: model.tickets,
+                    ticketID: draft.latest.id,
+                    prerequisites: draft.latest.prerequisites
+                ).equatable()
                 if !draft.latest.dependents.isEmpty {
                     Text("Unblocks").font(.headline)
                     ForEach(draft.latest.dependents, id: \.self) {
