@@ -31,22 +31,29 @@ import TixCore
 }
 
 @MainActor final class WorkspaceModel: ObservableObject {
-    @Published var tickets: [Ticket] = []
+    @Published var tickets: [Ticket] = [] {
+        didSet {
+            search.update(tickets)
+            rebuildRows()
+        }
+    }
     @Published var selection: Int64?
     @Published var path: String?
     @Published var error: String?
     @Published var recent: [String] =
         UserDefaults.standard.stringArray(forKey: "recentWorkspaces") ?? []
-    @Published var mode = "Waves"
+    @Published var mode = "Waves" {
+        didSet { if mode != oldValue { rebuildRows() } }
+    }
     @Published var newTicketRequest = 0
-    @Published var showCompleted = false
-    @Published var searchQuery = "" {
-        didSet { searchRevision += 1 }
+    @Published var showCompleted = false {
+        didSet { if showCompleted != oldValue { rebuildRows() } }
     }
-    @Published private(set) var searchRevision = 0
-    var isSearching: Bool {
-        !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
+    /// Stores the Waves or Lanes rows for the current tickets, mode, and Show done.
+    @Published private(set) var browseRows: [DisplayRow] = []
+    /// Stores the lane count of the Lanes layout, or 1 in Waves mode.
+    @Published private(set) var laneWidth = 1
+    let search = SearchModel()
     private var store: TicketStore?
     private var version: Int64?
     private var drafts: [Int64: TicketDraft] = [:]
@@ -66,18 +73,21 @@ import TixCore
         drafts[selection] = draft
         return draft
     }
-    var lanes: LaneLayout {
-        let visible = showCompleted ? tickets : tickets.filter { $0.status != .done }
-        return (try? TicketGraph.lanes(visible)) ?? LaneLayout(rows: [], width: 1)
+    /// Returns the rows to display for `results`, or the browse rows when not searching.
+    func displayRows(for results: SearchResults?) -> [DisplayRow] {
+        guard let results else { return browseRows }
+        return results.tickets.filter { showCompleted || $0.status != .done }
+            .map { DisplayRow(ticket: $0) }
     }
-    var displayRows: [DisplayRow] {
-        if isSearching {
-            return tickets.filter {
-                (showCompleted || $0.status != .done) && $0.matches(searchQuery)
-            }.map { DisplayRow(ticket: $0) }
-        }
+    // Store the rows rather than computing them in a getter, because a view body reads
+    // them several times per update and the graph layout costs milliseconds each time.
+    private func rebuildRows() {
         if mode == "Lanes" {
-            return lanes.rows.map { DisplayRow(ticket: $0.ticket, lane: $0) }
+            let visible = showCompleted ? tickets : tickets.filter { $0.status != .done }
+            let lanes = (try? TicketGraph.lanes(visible)) ?? LaneLayout(rows: [], width: 1)
+            browseRows = lanes.rows.map { DisplayRow(ticket: $0.ticket, lane: $0) }
+            laneWidth = lanes.width
+            return
         }
         var rows: [DisplayRow] = []
         for wave in (try? TicketGraph.waves(tickets)) ?? [] {
@@ -94,7 +104,8 @@ import TixCore
             if !done.isEmpty { rows.append(DisplayRow(heading: "Completed")) }
             rows += done.map { DisplayRow(ticket: $0) }
         }
-        return rows
+        browseRows = rows
+        laneWidth = 1
     }
     func restore() {
         if let first = recent.first,
@@ -123,7 +134,7 @@ import TixCore
             self.path = next.path
             tickets = initial
             selection = nil
-            searchQuery = ""
+            search.clear()
             drafts = [:]
             version = initialVersion
             recent = [next.path] + recent.filter { $0 != next.path }
@@ -202,7 +213,7 @@ import TixCore
         do {
             let ticket = try store.create(title: title)
             refresh(force: true)
-            searchQuery = ""
+            search.clear()
             selection = ticket.id
             return true
         } catch {

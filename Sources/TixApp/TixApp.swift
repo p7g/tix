@@ -48,33 +48,11 @@ struct WorkspaceView: View {
             if model.path == nil {
                 welcome
             } else {
-                TicketSearchBar(model: model)
+                TicketSearchBar(search: model.search)
                 Divider()
                 HSplitView {
-                    VStack(spacing: 0) {
-                        TicketTable(
-                            rows: model.displayRows,
-                            laneWidth: model.mode == "Lanes" && !model.isSearching ? model.lanes.width : 1,
-                            showsLanes: model.mode == "Lanes" && !model.isSearching,
-                            selection: $model.selection
-                        )
-                        .overlay {
-                            if model.isSearching && model.displayRows.isEmpty {
-                                ContentUnavailableView.search(text: model.searchQuery)
-                            }
-                        }
-                        Divider()
-                        HStack {
-                            Text(
-                                model.isSearching ? "\(model.displayRows.count) matches" : "\(model.tickets.count) tickets · \(model.tickets.filter(\.ready).count) ready"
-                            )
-                            Spacer()
-                            statusLegend("Ready", color: .green)
-                            statusLegend("Active", color: .orange)
-                            statusLegend("Blocked", color: .accentColor)
-                            statusLegend("Done", color: Color(nsColor: .secondaryLabelColor))
-                        }.font(.caption).foregroundStyle(.secondary).padding(10)
-                    }.frame(minWidth: 630)
+                    TicketListPane(model: model, search: model.search)
+                        .frame(minWidth: 630)
                     if let draft = model.selectedDraft {
                         TicketDetail(model: model, draft: draft).id(
                             draft.base.id
@@ -137,7 +115,7 @@ struct WorkspaceView: View {
                         Text("Lanes").tag("Lanes")
                     }
                     .pickerStyle(.segmented)
-                    .disabled(model.isSearching)
+                    .disabled(model.search.isActive)
                 }
             }
         }
@@ -170,13 +148,6 @@ struct WorkspaceView: View {
             Text(model.error ?? "")
         }
     }
-    private func statusLegend(_ title: String, color: Color) -> some View {
-        HStack(spacing: 4) {
-            Circle().fill(color).frame(width: 6, height: 6)
-            Text(title)
-        }
-    }
-
     private var welcome: some View {
         VStack(spacing: 18) {
             Image(systemName: "ticket").font(.system(size: 44)).foregroundStyle(
@@ -194,47 +165,68 @@ struct WorkspaceView: View {
     }
 }
 
-/// Keep keystrokes local so the workspace and AppKit table only update after a pause.
-struct TicketSearchBar: View {
+/// Shows the ticket table and its footer. Reads search results here rather than in
+/// `WorkspaceView`, so a finished search re-renders only this pane, not the detail pane.
+struct TicketListPane: View {
     @ObservedObject var model: WorkspaceModel
-    @State private var text = ""
+    var search: SearchModel
+
+    var body: some View {
+        let results = search.results
+        let rows = model.displayRows(for: results)
+        let showsLanes = model.mode == "Lanes" && results == nil
+        VStack(spacing: 0) {
+            TicketTable(
+                rows: rows,
+                laneWidth: showsLanes ? model.laneWidth : 1,
+                showsLanes: showsLanes,
+                selection: $model.selection
+            )
+            .overlay {
+                if let results, rows.isEmpty {
+                    ContentUnavailableView.search(text: results.query)
+                }
+            }
+            Divider()
+            HStack {
+                Text(
+                    results != nil ? "\(rows.count) matches" : "\(model.tickets.count) tickets · \(model.tickets.filter(\.ready).count) ready"
+                )
+                Spacer()
+                statusLegend("Ready", color: .green)
+                statusLegend("Active", color: .orange)
+                statusLegend("Blocked", color: .accentColor)
+                statusLegend("Done", color: Color(nsColor: .secondaryLabelColor))
+            }.font(.caption).foregroundStyle(.secondary).padding(10)
+        }
+    }
+
+    private func statusLegend(_ title: String, color: Color) -> some View {
+        HStack(spacing: 4) {
+            Circle().fill(color).frame(width: 6, height: 6)
+            Text(title)
+        }
+    }
+}
+
+/// Binds the field to `SearchModel.text`, which only this view reads, so a keystroke
+/// re-renders nothing else. Results arrive separately once each search finishes.
+struct TicketSearchBar: View {
+    @Bindable var search: SearchModel
 
     var body: some View {
         HStack {
             Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-            TextField("Search tickets by title, ID, or description", text: $text)
+            TextField("Search tickets by title, ID, or description", text: $search.text)
                 .textFieldStyle(.plain)
                 .accessibilityLabel("Search tickets")
-                .onSubmit { model.searchQuery = text }
-            if !text.isEmpty {
-                Button {
-                    text = ""
-                    model.searchQuery = ""
-                } label: {
+            if !search.text.isEmpty {
+                Button { search.clear() } label: {
                     Image(systemName: "xmark.circle.fill")
                 }.buttonStyle(.plain).help("Clear search")
             }
         }
         .padding(12)
-        .onAppear { text = model.searchQuery }
-        .onChange(of: model.searchRevision) { _, _ in
-            // Also cancel pending text when navigation or creation resets the search,
-            // including when the committed query was already empty.
-            text = model.searchQuery
-        }
-        .task(id: text) {
-            guard text != model.searchQuery else { return }
-            let query = text
-            if !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                do {
-                    try await Task.sleep(for: .milliseconds(200))
-                } catch {
-                    return
-                }
-            }
-            guard !Task.isCancelled else { return }
-            model.searchQuery = query
-        }
     }
 }
 
@@ -468,7 +460,7 @@ struct TicketDetail: View {
             if model.tickets.first(where: { $0.id == id })?.status == .done {
                 model.showCompleted = true
             }
-            model.searchQuery = ""
+            model.search.clear()
             model.selection = id
         } label: {
             Text(
